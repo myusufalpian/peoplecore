@@ -1,0 +1,7 @@
+.env.local
+.gradle/
+.wrangler/
+build/
+
+.idea/
+node_modules/

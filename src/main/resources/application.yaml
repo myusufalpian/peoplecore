@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: peoplecore
+  jpa:
+    open-in-view: false
