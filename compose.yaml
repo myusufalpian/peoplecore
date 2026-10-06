@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: peoplecore
+      POSTGRES_USER: peoplecore
+      POSTGRES_PASSWORD: ${PEOPLECORE_DB_PASSWORD:?Set PEOPLECORE_DB_PASSWORD in .env.local}
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - peoplecore-postgres:/var/lib/postgresql
+
+  localstack:
+    image: localstack/localstack:4.12.0
+    environment:
+      AWS_DEFAULT_REGION: ap-southeast-1
+      SERVICES: sqs
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - ./localstack/init/ready.d:/etc/localstack/init/ready.d
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.0
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?Set KEYCLOAK_ADMIN_USERNAME in .env.local}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env.local}
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+
+volumes:
+  peoplecore-postgres:

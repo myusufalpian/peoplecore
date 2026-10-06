@@ -1,0 +1,11 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:54329/peoplecore
+    username: peoplecore
+    password: ${PEOPLECORE_DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    enabled: true
