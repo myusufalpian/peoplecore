@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    image: peoplecore-postgres:18-local
+    build: ./local/postgres
     environment:
       POSTGRES_DB: peoplecore
       POSTGRES_USER: peoplecore
@@ -10,18 +11,33 @@ services:
     volumes:
       - peoplecore-postgres:/var/lib/postgresql
 
-  localstack:
-    image: localstack/localstack:4.12.0
+  postgres-runtime-provision:
+    image: peoplecore-postgres:18-local
+    build: ./local/postgres
+    profiles: ["provision"]
     environment:
-      AWS_DEFAULT_REGION: ap-southeast-1
-      SERVICES: sqs
-    ports:
-      - "127.0.0.1:4566:4566"
+      PGHOST: postgres
+      PGDATABASE: peoplecore
+      PGUSER: peoplecore
+      PGPASSWORD: ${PEOPLECORE_DB_PASSWORD:?Set PEOPLECORE_DB_PASSWORD in .env.local}
+      PEOPLECORE_RUNTIME_DB_PASSWORD: ${PEOPLECORE_RUNTIME_DB_PASSWORD:?Set PEOPLECORE_RUNTIME_DB_PASSWORD in .env.local}
     volumes:
-      - ./localstack/init/ready.d:/etc/localstack/init/ready.d
+      - ./local/postgres/provision-runtime.sql:/provision-runtime.sql:ro
+    entrypoint: ["psql", "-X", "-f", "/provision-runtime.sql"]
+
+  sqs:
+    image: peoplecore-sqs:1.7.1-local
+    build:
+      context: .
+      dockerfile: local/sqs/Dockerfile
+    ports:
+      - "127.0.0.1:4566:9324"
+    volumes:
+      - ./local/sqs/elasticmq.conf:/opt/elasticmq.conf:ro
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4.0
+    image: peoplecore-keycloak:26.8.0-local
+    build: ./local/keycloak
     command: start-dev --import-realm
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?Set KEYCLOAK_ADMIN_USERNAME in .env.local}

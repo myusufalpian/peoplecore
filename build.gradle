@@ -8,6 +8,9 @@ plugins {
 group = 'id.mydev'
 version = '0.0.1-SNAPSHOT'
 
+ext['tomcat.version'] = '11.0.26'
+ext['jackson-bom.version'] = '3.1.7'
+
 java {
 	toolchain {
 		languageVersion = JavaLanguageVersion.of(25)
@@ -20,6 +23,7 @@ repositories {
 
 def coverageMinimum = new BigDecimal('0.85')
 def jacocoTestExecutionData = layout.buildDirectory.file('jacoco/test.exec')
+def postgresExecutionData = layout.buildDirectory.file('jacoco/postgresIntegrationTest.exec')
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
@@ -29,6 +33,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-json'
 	implementation 'org.flywaydb:flyway-database-postgresql'
 	implementation platform('software.amazon.awssdk:bom:2.42.33')
 	implementation 'software.amazon.awssdk:s3'
@@ -47,7 +52,7 @@ dependencies {
 }
 
 tasks.named('test') {
-	useJUnitPlatform()
+	useJUnitPlatform { excludeTags 'postgres' }
 	inputs.property('localR2S3Endpoint', providers.environmentVariable('PEOPLECORE_R2_LOCAL_S3_ENDPOINT').orElse(''))
 	finalizedBy tasks.named('jacocoTestReport')
 	jacoco {
@@ -60,25 +65,45 @@ jacoco {
 }
 
 tasks.named('jacocoTestReport') {
+	mustRunAfter tasks.named('test')
+	mustRunAfter 'postgresIntegrationTest'
+	executionData(jacocoTestExecutionData, postgresExecutionData)
 	reports {
 		xml.required = true
 		html.required = true
 	}
 }
 
+tasks.register('postgresIntegrationTest', Test) {
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform { includeTags 'postgres' }
+    shouldRunAfter tasks.named('test')
+    jacoco { destinationFile = postgresExecutionData.get().asFile }
+    inputs.property('postgresUrl', providers.environmentVariable('PEOPLECORE_TEST_DB_URL').orElse('jdbc:postgresql://localhost:54339/peoplecore_tests'))
+}
+
+tasks.register('migrate', JavaExec) {
+    dependsOn tasks.named('classes')
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'id.mydev.peoplecore.infrastructure.migration.MigrationRunner'
+}
+
 tasks.register('verifyJacocoExecutionData') {
-	dependsOn tasks.named('test')
+	dependsOn tasks.named('test'), tasks.named('postgresIntegrationTest')
 	doLast {
-		File executionData = jacocoTestExecutionData.get().asFile
-		if (!executionData.isFile() || executionData.length() == 0) {
-			throw new GradleException('JaCoCo execution data is missing or empty.')
+		[jacocoTestExecutionData, postgresExecutionData].each { data ->
+			File executionData = data.get().asFile
+			if (!executionData.isFile() || executionData.length() == 0) {
+				throw new GradleException('Expected JaCoCo execution data is missing or empty: ' + executionData.name)
+			}
 		}
 	}
 }
 
 tasks.named('jacocoTestCoverageVerification') {
 	dependsOn tasks.named('verifyJacocoExecutionData')
-	executionData(jacocoTestExecutionData)
+	executionData(jacocoTestExecutionData, postgresExecutionData)
 	violationRules {
 		rule {
 			limit {

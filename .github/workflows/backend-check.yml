@@ -1,0 +1,73 @@
+name: Backend checks
+on:
+  pull_request:
+  push:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      PEOPLECORE_DB_PASSWORD: ci-unused-local-password
+      PEOPLECORE_RUNTIME_DB_PASSWORD: ci-unused-runtime-password
+      KEYCLOAK_ADMIN_USERNAME: ci-local-admin
+      KEYCLOAK_ADMIN_PASSWORD: ci-local-admin-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Build local service images and start test database
+        run: |
+          docker compose build
+          docker run -d --name peoplecore-ci-postgres -p 127.0.0.1:54339:5432 \
+            -e POSTGRES_DB=peoplecore_tests -e POSTGRES_USER=peoplecore_test -e POSTGRES_PASSWORD=peoplecore_test \
+            --health-cmd 'pg_isready -U peoplecore_test -d peoplecore_tests' \
+            --health-interval 5s --health-timeout 5s --health-retries 10 peoplecore-postgres:18-local
+          for attempt in $(seq 1 60); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' peoplecore-ci-postgres)" = healthy ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs peoplecore-ci-postgres
+          exit 1
+      - run: ./gradlew check bootJar --no-daemon --console=plain
+      - name: Verify local SQS and Keycloak contracts
+        run: |
+          docker compose up -d sqs keycloak
+          python3 -m venv /tmp/sqs-verify
+          /tmp/sqs-verify/bin/pip install boto3==1.42.97
+          /tmp/sqs-verify/bin/python local/verify-sqs.py
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://localhost:8081/realms/peoplecore-local/.well-known/openid-configuration >/dev/null; then
+              node local/verify-keycloak.mjs
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs keycloak
+          exit 1
+      - name: Install verified scanner
+        run: |
+          curl --fail --location --retry 3 https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz -o /tmp/trivy.tar.gz
+          echo 'c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f  /tmp/trivy.tar.gz' | sha256sum --check
+          mkdir -p /tmp/peoplecore-scanner
+          tar -xzf /tmp/trivy.tar.gz -C /tmp/peoplecore-scanner trivy
+      - name: Security scans and failure proof
+        env:
+          TRIVY_BIN: /tmp/peoplecore-scanner/trivy
+        run: |
+          python3 -m unittest local/security/test_sqs_inventory.py
+          bash local/security/check.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-and-coverage-reports
+          path: |
+            build/reports/tests/
+            build/test-results/
+            build/reports/jacoco/
+            build/reports/security/
+          if-no-files-found: error
