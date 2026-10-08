@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
-const endpoint = 'http://localhost:8081/realms/peoplecore-local/protocol/openid-connect/auth';
+const baseUrl = process.env.KEYCLOAK_VERIFY_URL ?? 'http://localhost:8081';
+const endpoint = `${baseUrl}/realms/peoplecore-local/protocol/openid-connect/auth`;
 const parameters = {
   client_id: 'peoplecore-web',
   redirect_uri: 'http://localhost:5173/callback',

@@ -1,0 +1,23 @@
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+
+plugins { id 'base' }
+repositories { mavenCentral() }
+configurations { sqsRuntime }
+dependencies { sqsRuntime 'org.elasticmq:elasticmq-server_2.13:1.7.1' }
+
+tasks.register('stageRuntime', Sync) {
+    from(configurations.sqsRuntime) { into 'lib' }
+    into layout.buildDirectory.dir('runtime')
+    doLast {
+        def components = configurations.sqsRuntime.resolvedConfiguration.resolvedArtifacts.collect { artifact ->
+            def module = artifact.moduleVersion.id
+            [type: 'library', group: module.group, name: module.name, version: module.version,
+             purl: "pkg:maven/${module.group}/${module.name}@${module.version}",
+             hashes: [[alg: 'SHA-256', content: MessageDigest.getInstance('SHA-256').digest(artifact.file.bytes).encodeHex().toString()]],
+             properties: [[name: 'peoplecore:runtime-file', value: "lib/${artifact.file.name}"]]]
+        }.sort { it.purl }
+        new File(destinationDir, 'sbom.cdx.json').text = JsonOutput.prettyPrint(JsonOutput.toJson(
+            [bomFormat: 'CycloneDX', specVersion: '1.5', version: 1, components: components]))
+    }
+}

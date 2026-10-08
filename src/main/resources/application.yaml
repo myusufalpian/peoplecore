@@ -3,3 +3,10 @@ spring:
     name: peoplecore
   jpa:
     open-in-view: false
+  flyway:
+    enabled: false
+
+logging:
+  level:
+    org.hibernate.orm.jdbc.error: 'OFF'
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: 'OFF'
