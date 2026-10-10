@@ -6,6 +6,8 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 
+import id.mydev.peoplecore.common.api.PayloadLimits;
+import id.mydev.peoplecore.common.api.PayloadTooLargeException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -50,7 +52,8 @@ class CommandExecutionCoordinatorTest {
         assertThrows(tools.jackson.core.JacksonException.class, () -> coordinator.requestHash("{}{}"));
         assertThrows(IllegalArgumentException.class, () -> new CommandExecutionService.CommandContext(" ", "TYPE", "KEY", "{}", null));
         assertThrows(IllegalArgumentException.class, () -> new CommandExecutionService.CommandContext("actor", "TYPE", "KEY", "{}", Duration.ZERO));
-        assertThrows(IllegalArgumentException.class, () -> new CommandExecutionService.CommandContext("actor", "TYPE", "x".repeat(129), "{}", null));
+        assertThrows(InvalidIdempotencyKeyException.class, () -> new CommandExecutionService.CommandContext("actor", "TYPE", "x".repeat(129), "{}", null));
+        assertThrows(InvalidIdempotencyKeyException.class, () -> new CommandExecutionService.CommandContext("actor", "TYPE", "  ", "{}", null));
         assertThrows(IllegalArgumentException.class, () -> new CommandExecutionService.CommandExecutionPlan<>(java.util.List::of, java.util.List.class, null, null));
     }
 }

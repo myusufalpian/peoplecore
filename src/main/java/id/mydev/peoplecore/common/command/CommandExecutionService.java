@@ -3,6 +3,7 @@ package id.mydev.peoplecore.common.command;
 import id.mydev.peoplecore.common.audit.AuditEvent;
 import id.mydev.peoplecore.common.security.CurrentAccessPolicy;
 import id.mydev.peoplecore.common.security.CurrentCaller;
+import jakarta.persistence.EntityManager;
 import org.springframework.security.access.AccessDeniedException;
 import id.mydev.peoplecore.common.audit.AuditEventWriter;
 import id.mydev.peoplecore.common.outbox.OutboxEvent;
@@ -22,6 +23,7 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 @Service
@@ -33,6 +35,7 @@ public class CommandExecutionService {
     private final CommandResultSerializer serializer;
     private final CommandExecutionCoordinator coordinator;
     private final CurrentAccessPolicy accessPolicy;
+    private final EntityManager entities;
 
     public CommandExecutionService(
         CommandReceiptRepository commandReceiptRepository,
@@ -40,7 +43,8 @@ public class CommandExecutionService {
         OutboxEventRepository outboxEventRepository,
         CommandResultSerializer serializer,
         CommandExecutionCoordinator coordinator,
-        CurrentAccessPolicy accessPolicy
+        CurrentAccessPolicy accessPolicy,
+        EntityManager entities
     ) {
         this.commandReceiptRepository = commandReceiptRepository;
         this.auditEventWriter = auditEventWriter;
@@ -48,6 +52,7 @@ public class CommandExecutionService {
         this.serializer = serializer;
         this.coordinator = coordinator;
         this.accessPolicy = accessPolicy;
+        this.entities = entities;
     }
 
     public record CommandContext(
@@ -60,7 +65,7 @@ public class CommandExecutionService {
         public CommandContext {
             validateIdentity(actorId, "actorId");
             validateIdentity(commandType, "commandType");
-            validateIdentity(idempotencyKey, "idempotencyKey");
+            validateIdempotencyKey(idempotencyKey);
             Objects.requireNonNull(requestPayload, "requestPayload must not be null");
             if (receiptTtl == null) {
                 receiptTtl = Duration.ofDays(7);
@@ -104,8 +109,26 @@ public class CommandExecutionService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public <T> T executeCommand(CommandContext context, CommandExecutionPlan<T> plan) {
-        Objects.requireNonNull(context, "context must not be null");
         Objects.requireNonNull(plan, "plan must not be null");
+        return executeInternal(context, plan.domainAction(), plan.resultType(),
+            result -> plan.audit(), result -> plan.outbox());
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public <T> T executeCommand(CommandContext context, Supplier<T> domainAction, Class<T> resultType,
+                                Function<T, AuditDescriptor> auditMapping,
+                                Function<T, OutboxDescriptor> outboxMapping) {
+        Objects.requireNonNull(domainAction, "domainAction must not be null");
+        Objects.requireNonNull(resultType, "resultType must not be null");
+        Assert.isTrue(!Collection.class.isAssignableFrom(resultType)
+            && !Map.class.isAssignableFrom(resultType), "Use a concrete result DTO for parameterized results");
+        return executeInternal(context, domainAction, resultType, auditMapping, outboxMapping);
+    }
+
+    private <T> T executeInternal(CommandContext context, Supplier<T> domainAction, Class<T> resultType,
+                                  Function<T, AuditDescriptor> auditMapping,
+                                  Function<T, OutboxDescriptor> outboxMapping) {
+        Objects.requireNonNull(context, "context must not be null");
         var caller = CurrentCaller.require();
         if (!caller.getName().equals(context.actorId())) {
             throw new AccessDeniedException("Command actor does not match authenticated caller");
@@ -113,6 +136,8 @@ public class CommandExecutionService {
         accessPolicy.checkCommand(caller, context);
         String requestHash = coordinator.requestHash(context.requestPayload());
         coordinator.lock(context.actorId(), context.commandType(), context.idempotencyKey());
+        entities.flush();
+        entities.clear();
         accessPolicy.checkCommand(caller, context);
         var existing = commandReceiptRepository.findByActorIdAndCommandTypeAndIdempotencyKey(
             context.actorId(), context.commandType(), context.idempotencyKey());
@@ -125,21 +150,21 @@ public class CommandExecutionService {
                 throw new CommandBusyException("Command has an incomplete receipt");
             }
             accessPolicy.checkReplay(caller, context, receipt.getResultPayload());
-            return serializer.deserialize(receipt.getResultPayload(), plan.resultType());
+            return serializer.deserialize(receipt.getResultPayload(), resultType);
         }
 
         Instant now = Instant.now();
-        T result = plan.domainAction().get();
-        Assert.state(result != null || Void.class.equals(plan.resultType()), "Only a void command may return null");
+        T result = domainAction.get();
+        Assert.state(result != null || Void.class.equals(resultType), "Only a void command may return null");
         String serializedResult = serializer.serialize(result);
-        serializer.deserialize(serializedResult, plan.resultType());
+        serializer.deserialize(serializedResult, resultType);
         CommandReceipt receipt = new CommandReceipt(
             context.actorId(), context.commandType(), context.idempotencyKey(), requestHash,
             "SUCCESS", serializedResult, now, now.plus(context.receiptTtl()));
         commandReceiptRepository.save(receipt);
 
-        if (plan.audit() != null) {
-            AuditDescriptor audit = plan.audit();
+        AuditDescriptor audit = auditMapping == null ? null : auditMapping.apply(result);
+        if (audit != null) {
             AuditEvent auditEvent = new AuditEvent(
                 UUID.randomUUID(),
                 context.actorId(),
@@ -155,8 +180,8 @@ public class CommandExecutionService {
             auditEventWriter.append(auditEvent);
         }
 
-        if (plan.outbox() != null) {
-            OutboxDescriptor outbox = plan.outbox();
+        OutboxDescriptor outbox = outboxMapping == null ? null : outboxMapping.apply(result);
+        if (outbox != null) {
             OutboxEvent outboxEvent = new OutboxEvent(
                 UUID.randomUUID(),
                 outbox.eventType(),
@@ -176,6 +201,10 @@ public class CommandExecutionService {
     private static void validateIdentity(String value, String field) {
         Assert.hasText(value, field + " must not be blank");
         Assert.isTrue(value.length() <= 128 && value.indexOf('\0') < 0, field + " is invalid");
+    }
+
+    private static void validateIdempotencyKey(String idempotencyKey) {
+        IdempotencyKeys.requireValid(idempotencyKey);
     }
 
     public static String computeSha256(String input) {
