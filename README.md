@@ -1,6 +1,6 @@
 # Peoplecore Backend
 
-Peoplecore is a Spring Boot backend that provides the foundation for a secure, transactional people and business domain API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
+Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, and identity enrollment through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
 
 ## Technology stack
 
@@ -8,13 +8,13 @@ Peoplecore is a Spring Boot backend that provides the foundation for a secure, t
 - Spring Boot 4.1.1 and Spring MVC.
 - Spring Data JPA with PostgreSQL 18.
 - Flyway for versioned database migrations.
-- Spring Security for HTTP Basic authentication in the local foundation and OAuth2 client/resource-server support for deployment integrations.
+- Spring Security with JWT resource-server validation and database-backed account, role, and organization-scope checks.
 - Jackson 3 for JSON serialization and Bean Validation for request validation.
 - AWS SDK v2 S3 client for object storage integration.
-- JUnit 5, Spring Boot test slices, Testcontainers-style PostgreSQL fixtures, and JaCoCo for verification.
+- JUnit 5, Spring Boot test slices, isolated-schema PostgreSQL fixtures, and JaCoCo for verification.
 - Docker Compose for local PostgreSQL, SQS-compatible ElasticMQ, and Keycloak services.
 
-The application is started from `id.mydev.peoplecore.PeoplecoreApplication`. Database migrations are intentionally run explicitly through the `migrate` Gradle task; normal application startup does not mutate the database schema.
+The application is started from `id.mydev.peoplecore.PeoplecoreApplication`. Database migrations are intentionally run explicitly through the `migrate` command; normal application startup does not mutate the database schema.
 
 ## Repository structure
 
@@ -23,18 +23,20 @@ src/main/java/id/mydev/peoplecore/
 ├── common/api       HTTP response models, validation, pagination, exception mapping
 ├── common/audit     append-only audit recording and scoped audit queries
 ├── common/command   transactional command execution, receipts, conflicts, and idempotency
-├── common/outbox    durable events published from the transaction boundary
+├── common/outbox    pending events stored within the command transaction
 ├── common/security  authentication, authorization, correlation IDs, and payload limits
-└── infrastructure/  migrations, runtime database checks, and profile configuration
+├── identity/        accounts, effective roles, enrollment, bindings, access lifecycle
+├── organization/    employees, employment dates, assignments, scoped history
+└── infrastructure/  migrations, runtime database checks, and runtime configuration
 ```
 
-The package layout follows the technical responsibility of each component. Domain-specific features should keep their application, persistence, mapping, and HTTP concerns close to the feature while reusing the common command, API, audit, outbox, and security infrastructure.
+The package layout follows the technical responsibility of each component. Identity and organization contain `api/controller`, `api/dto`, `api/mapper`, `application/command`, `application/service`, `application/policy`, `application/mapper`, `application/trail`, and `domain/model`, `domain/repository`, `domain/exception` packages. These modules reuse the common command, API, audit, outbox, and security infrastructure.
 
 ## Code conventions
 
 Use Java records for immutable API and value data where appropriate, constructor or method injection for dependencies, and explicit validation at input boundaries. Keep persistence access behind repository or service classes and keep mapping logic out of controllers. Use `Instant` for timestamps and `BigDecimal` for exact decimal values.
 
-HTTP errors are mapped centrally through `GlobalExceptionHandler`; controllers should raise the relevant typed exception instead of constructing ad-hoc error JSON. Security decisions belong in `CurrentAccessPolicy` and the Spring Security configuration. Audit records are written through the audit writer and are append-only at the database layer.
+HTTP errors are mapped centrally through `GlobalExceptionHandler`; controllers should raise the relevant typed exception instead of constructing ad-hoc error JSON. Security decisions belong in the access-policy and identity services and the Spring Security configuration. Audit records are written through the audit writer and are append-only at the database layer.
 
 Tests mirror the production package structure. Unit tests cover deterministic domain and infrastructure behavior, HTTP tests verify status codes and response contracts, and PostgreSQL-tagged tests verify migrations and database constraints against a real PostgreSQL instance.
 
@@ -67,22 +69,59 @@ Failure responses use this shape:
 
 `details` is omitted when there are no field-level validation errors. Authentication, authorization, validation, not-found, pagination, payload-size, and unexpected failures are mapped to the corresponding HTTP status by the central exception and security handlers. Every request receives a correlation ID, and oversized or excessively nested JSON is rejected at the request boundary.
 
-The current codebase provides the API response and security contract foundation; feature endpoints are added as their domain use cases are implemented. There is no generated OpenAPI/Swagger endpoint catalog in the current runtime, so the Java response records, exception handler, and HTTP tests are the authoritative contract until endpoint-specific documentation is introduced.
+Implemented endpoints include `/api/v1/employees`, `/api/v1/me/access`, and `/api/v1/enrollments`. Employee operations cover creation, number changes, employment start/end dates, assignment creation, and assignment revision. Employee detail includes the manager public UUID and assignment ancestry. Assignment intervals are start-inclusive and end-exclusive, normalized to microsecond precision, and checked for overlap. Revisions preserve the original row and any retained earlier interval. Employment dates do not set the account access cutoff.
+
+Enrollment supports invitation issuance/reissue, activation, offboarding, rebind, rehire, and explicit role restoration. Invitations are bound to a verified issuer/subject, store a secret hash, and enforce expiry, revocation, one-time consumption, and bounded activation attempts. The plaintext secret appears only in the initial issuance response; replay returns metadata without the secret. Rehire does not automatically restore access roles.
+
+Business endpoints require a verified JWT identity. Account status, access cutoff, active database role assignments, and current organization scope determine access; token role claims do not grant HRIS roles. Own-employee reads require a current binding and an effective role. Invitation issue/reissue and identity rebind require both applicable HR scope and an effective organization-wide `SYSTEM_ADMIN` grant. The shared HTTP chain retains Basic authentication, but Basic credentials do not satisfy these business identity checks.
+
+Mutations require `Idempotency-Key`. Command receipts, before/after audit details where applicable, and outbox records commit atomically with domain changes. Replay rechecks current authorization, and changed payloads conflict. Outbox records are durable pending events; persisting one does not mean an external provider has delivered a notification.
+
+Detailed behavior and HTTP examples are in [implementation.md](implementation.md); module and transaction boundaries are in [architecture.md](architecture.md).
 
 ## Running and verifying
 
+Use Java 25. Supply `PEOPLECORE_DB_PASSWORD`, `PEOPLECORE_RUNTIME_DB_PASSWORD`, `KEYCLOAK_ADMIN_USERNAME`, and `KEYCLOAK_ADMIN_PASSWORD` in the shell environment. Start PostgreSQL before migrating:
+
+```bash
+docker compose up -d postgres
+export PEOPLECORE_MIGRATION_DB_URL=jdbc:postgresql://localhost:54329/peoplecore
+export PEOPLECORE_MIGRATION_DB_USERNAME=peoplecore
+export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
+./gradlew migrate
+docker compose --profile provision run --rm postgres-runtime-provision
+```
+
+The provisioning script grants foundation-table permissions. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  role_assignments, auth_generation, employee_assignments, enrollment_invitations,
+  account_bindings, activation_attempts, activation_budget_slots, activation_admission_lock
+TO peoplecore_runtime;
+```
+
+Keep the existing audit-table permission limited to `SELECT, INSERT`. Provision initial accounts and role assignments through controlled owner-side administration; the API has no administrator bootstrap endpoint.
+
+Enable JWT validation with your identity provider configuration and define the accepted organization units:
+
+```bash
+export PEOPLECORE_SECURITY_JWT_ISSUER_URI="https://identity.example.com/realms/peoplecore"
+export PEOPLECORE_SECURITY_JWT_AUDIENCE="peoplecore"
+export PEOPLECORE_SECURITY_JWT_JWKS_URI="https://identity.example.com/realms/peoplecore/protocol/openid-connect/certs"
+export PEOPLECORE_ORGANIZATION_ALLOWED_UNITS="ENG,FIN"
+./gradlew bootRun --args="--spring.profiles.active=local"
+```
+
+Replace the example issuer, audience, and JWKS URL with values matching your verified tokens and provisioned account identities. `peoplecore.runtime.role` defaults to `api`; setting it to `worker` starts without an HTTP server.
+
 ```bash
 ./gradlew test
+./gradlew postgresIntegrationTest
 ./gradlew check
 ./gradlew bootJar
-./gradlew migrate
 ```
 
-Start local dependencies with `docker compose --profile provision up` after supplying the required environment variables. Use the PostgreSQL integration test task when a test database is available:
+PostgreSQL tests require a separate `peoplecore_tests` database, defaulting to `jdbc:postgresql://localhost:54339/peoplecore_tests`, with `peoplecore_test` credentials. Override these with `PEOPLECORE_TEST_DB_URL`, `PEOPLECORE_TEST_DB_USERNAME`, and `PEOPLECORE_TEST_DB_PASSWORD`. The test administrator needs permission to create isolated schemas and temporary runtime roles; fixtures remove them afterward. Never point these tests at the application database.
 
-```bash
-./gradlew postgresIntegrationTest
-```
-
-The `check` task requires both ordinary and PostgreSQL test execution data and enforces at least 85% line and branch coverage.
-
+`check` requires ordinary and PostgreSQL execution data and enforces at least 85% line and branch coverage. Migrations reject invalid existing assignment intervals rather than rewriting history.

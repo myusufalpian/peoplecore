@@ -298,6 +298,37 @@ class CommandExecutionServiceTest {
         assertThrows(ResourceNotFoundException.class, () -> audit.findByAggregate("EMPLOYEE", denied, 0, 10));
     }
 
+    @Test
+    void dynamicDescriptorsMapAuditTrailFromActualOutcome() {        authenticate("actor");
+        String key = UUID.randomUUID().toString();
+        UUID id = UUID.randomUUID();
+        Result result = service.executeCommand(context(key, "{}"), () -> insert(key, id), Result.class,
+            outcome -> new CommandExecutionService.AuditDescriptor("CREATE", "EMPLOYEE", null,
+                outcome.id(), null, "Mapped from outcome", null),
+            outcome -> new CommandExecutionService.OutboxDescriptor("CREATED", 1, "EMPLOYEE", null,
+                outcome.id(), "{\"id\":\"" + outcome.id() + "\"}"));
+        assertEquals(new Result(id, "CREATED"), result);
+        assertEquals("Mapped from outcome", jdbc.queryForObject(
+            "select reason from audit_events where aggregate_public_id=?", String.class, id));
+        assertEquals("{\"id\":\"" + id + "\"}", jdbc.queryForObject(
+            "select payload from outbox_events where aggregate_public_id=?", String.class, id));
+        assertEquals(result, service.executeCommand(context(key, "{}"), () -> insert(key, id), Result.class,
+            outcome -> { throw new AssertionError("Replay must not remap descriptors"); },
+            outcome -> { throw new AssertionError("Replay must not remap descriptors"); }));
+    }
+
+    @Test
+    void staticPlanWithoutTrailSkipsAuditAndOutbox() {
+        authenticate("actor");
+        String key = UUID.randomUUID().toString();
+        UUID id = UUID.randomUUID();
+        var command = new CommandExecutionService.CommandExecutionPlan<>(() -> insert(key, id), Result.class, null, null);
+        assertEquals(new Result(id, "CREATED"), service.executeCommand(context(key, "{}"), command));
+        assertEquals(1, jdbc.queryForObject("select count(*) from domain_probe where command_key=?", Integer.class, key));
+        assertEquals(0, jdbc.queryForObject("select count(*) from audit_events where aggregate_public_id=?", Integer.class, id));
+        assertEquals(0, jdbc.queryForObject("select count(*) from outbox_events where aggregate_public_id=?", Integer.class, id));
+    }
+
     private void awaitAdvisoryWait() throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
