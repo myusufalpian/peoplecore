@@ -1,6 +1,6 @@
 # Peoplecore Backend
 
-Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, and identity enrollment through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
+Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, and reviewed contact-profile changes through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
 
 ## Technology stack
 
@@ -26,11 +26,12 @@ src/main/java/id/mydev/peoplecore/
 ├── common/outbox    pending events stored within the command transaction
 ├── common/security  authentication, authorization, correlation IDs, and payload limits
 ├── identity/        accounts, effective roles, enrollment, bindings, access lifecycle
-├── organization/    employees, employment dates, assignments, scoped history
+├── approval/        typed profile rule snapshots, activation, route evaluator/preview
+├── organization/    employees, assignments, contact profiles, proposals, review history
 └── infrastructure/  migrations, runtime database checks, and runtime configuration
 ```
 
-The package layout follows the technical responsibility of each component. Identity and organization contain `api/controller`, `api/dto`, `api/mapper`, `application/command`, `application/service`, `application/policy`, `application/mapper`, `application/trail`, and `domain/model`, `domain/repository`, `domain/exception` packages. These modules reuse the common command, API, audit, outbox, and security infrastructure.
+The package layout follows the technical responsibility of each component. Business modules organize HTTP contracts under `api`, command execution and services under `application`, and models, repositories, and typed exceptions under `domain`. Dedicated mappers, policies, validators, and trail writers are present where needed. These modules reuse the common command, API, audit, outbox, and security infrastructure.
 
 ## Code conventions
 
@@ -77,7 +78,15 @@ Business endpoints require a verified JWT identity. Account status, access cutof
 
 Mutations require `Idempotency-Key`. Command receipts, before/after audit details where applicable, and outbox records commit atomically with domain changes. Replay rechecks current authorization, and changed payloads conflict. Outbox records are durable pending events; persisting one does not mean an external provider has delivered a notification.
 
-Detailed behavior and HTTP examples are in [implementation.md](implementation.md); module and transaction boundaries are in [architecture.md](architecture.md).
+Contact-profile self-service uses `/api/v1/employees/me/profile-proposals` and `/api/v1/profile-proposals/{id}`. Employees propose phone, email, address, or complete emergency-contact changes; active values change only after an assigned eligible HR reviewer approves. Returned proposals can be edited before resubmission; editing preserves `RETURNED`, and resubmission captures fresh routing context. Explicit null values and field removal are rejected. Touched-group counters detect intervening changes, including A→B→A; unrelated corrections survive approval. One open proposal per employee is enforced in PostgreSQL.
+
+HR publishes designated-reviewer rule snapshots through `/api/v1/approval/profile-rule-sets`. Changing the single global activation pointer additionally requires organization-wide HR authority, including receipt replay. Scoped publication does not confer global activation authority. No match/tie or ineligible reviewer leaves a visible blocked request; repair uses explicit retry/reassignment. Owner/current scoped HR alone may read sensitive proposal history.
+
+Proposal detail includes `availableActions` derived from current authority and state; every command rechecks authorization. History exposes sealed revisions, decisions, route evaluations, and reviewer-assignment history. Submitted revisions pin the effective organization-assignment UUID and predecessor UUID alongside the evaluated unit and job level. `organizationContextStatus` distinguishes `RESOLVED`, `NOT_EVALUATED`, and legacy `UNKNOWN` context without inventing historical references.
+
+For `/api/v1/profile-proposals/{id}/history`, `page` selects revisions; `decisionPage`, `evaluationPage`, and `assignmentPage` independently select the other history collections. All pages are zero-based and share `size` (default 20, maximum 100). Metadata reports each collection total, allowing clients to retrieve history beyond the first page.
+
+Detailed behavior and HTTP examples are in [IMPLEMENTATION.md](IMPLEMENTATION.md); module and transaction boundaries are in [architecture.md](architecture.md).
 
 ## Running and verifying
 
@@ -92,7 +101,7 @@ export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
 docker compose --profile provision run --rm postgres-runtime-provision
 ```
 
-The provisioning script grants foundation-table permissions. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
+The provisioning script grants foundation and contact-profile approval permissions, including append-only history and audit access. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
 
 ```sql
 GRANT SELECT, INSERT, UPDATE, DELETE ON

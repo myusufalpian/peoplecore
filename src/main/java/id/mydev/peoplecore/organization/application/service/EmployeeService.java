@@ -305,6 +305,41 @@ public class EmployeeService {
         return Optional.ofNullable(current);
     }
 
+    public record OrganizationContext(UUID assignmentPublicId, UUID predecessorPublicId,
+                                      String orgUnit, String jobLevel) { }
+
+    @Transactional(readOnly = true)
+    public Optional<OrganizationContext> organizationContext(Long employeeId, Instant at) {
+        Objects.requireNonNull(at, "at must not be null");
+        return assignments.findByEmployeeIdAndSupersededAtIsNullOrderByValidFromAsc(employeeId).stream()
+            .filter(assignment -> !assignment.getValidFrom().isAfter(at)
+                && (assignment.getValidTo() == null || at.isBefore(assignment.getValidTo())))
+            .max(java.util.Comparator.comparing(EmployeeAssignment::getValidFrom))
+            .map(assignment -> new OrganizationContext(assignment.getPublicId(),
+                assignment.getSupersedesId(), assignment.getOrgUnit(), assignment.getJobLevel()));
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<String> currentJobLevel(Long employeeId, Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        List<EmployeeAssignment> history = assignments.findByEmployeeIdAndSupersededAtIsNullOrderByValidFromAsc(employeeId);
+        String current = null;
+        Instant currentFrom = null;
+        for (EmployeeAssignment assignment : history) {
+            if (assignment.getValidFrom().isAfter(now)) {
+                continue;
+            }
+            if (assignment.getValidTo() != null && !now.isBefore(assignment.getValidTo())) {
+                continue;
+            }
+            if (currentFrom == null || assignment.getValidFrom().isAfter(currentFrom)) {
+                current = assignment.getJobLevel();
+                currentFrom = assignment.getValidFrom();
+            }
+        }
+        return Optional.ofNullable(current);
+    }
+
     @Transactional
     public Employee markOffboarded(Long employeeId) {
         Employee employee = employees.lockById(employeeId)

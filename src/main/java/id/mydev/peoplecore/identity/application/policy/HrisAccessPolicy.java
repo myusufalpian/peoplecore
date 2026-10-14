@@ -7,7 +7,10 @@ import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.application.service.EnrollmentService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
+import id.mydev.peoplecore.approval.application.service.ApprovalRuleService;
 import id.mydev.peoplecore.organization.application.service.EmployeeService;
+import id.mydev.peoplecore.organization.application.service.ProfileProposalService;
+import id.mydev.peoplecore.organization.application.service.ProfileProposalService.ReplaySnapshot;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -41,18 +44,40 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
     );
     private static final Set<String> IDENTITY_COMMANDS = Set.of(
         "INVITATION_ISSUE", "INVITATION_REISSUE", "ACCOUNT_REBIND");
+    private static final Set<String> PROFILE_OWNER_COMMANDS = Set.of(
+        "PROFILE_CREATE",
+        "PROFILE_EDIT",
+        "PROFILE_SUBMIT",
+        "PROFILE_RESUBMIT",
+        "PROFILE_WITHDRAW");
+    private static final Set<String> PROFILE_DECISION_COMMANDS = Set.of(
+        "PROFILE_APPROVE",
+        "PROFILE_REJECT",
+        "PROFILE_RETURN");
+    private static final Set<String> PROFILE_OPERATOR_COMMANDS = Set.of(
+        "PROFILE_REASSIGN",
+        "PROFILE_ROUTE_RETRY",
+        "PROFILE_MASTER_CORRECT");
+    private static final Set<String> RULE_COMMANDS = Set.of(
+        "PROFILE_RULE_PUBLISH",
+        "PROFILE_RULE_ACTIVATE");
 
     private final AccountAccessService access;
     private final EmployeeService employees;
     private final EnrollmentService enrollments;
+    private final ProfileProposalService proposals;
+    private final ApprovalRuleService approvalRules;
     private final ObjectMapper mapper;
     private final Clock clock;
 
     public HrisAccessPolicy(AccountAccessService access, EmployeeService employees,
-                            EnrollmentService enrollments, ObjectMapper mapper, Clock clock) {
+                            EnrollmentService enrollments, ProfileProposalService proposals,
+                            ApprovalRuleService approvalRules, ObjectMapper mapper, Clock clock) {
         this.access = access;
         this.employees = employees;
         this.enrollments = enrollments;
+        this.proposals = proposals;
+        this.approvalRules = approvalRules;
         this.mapper = mapper;
         this.clock = clock;
     }
@@ -63,6 +88,22 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
             return;
         }
         Instant now = Instant.now(clock);
+        if (PROFILE_OWNER_COMMANDS.contains(command.commandType())) {
+            requireBoundEmployee(caller, now);
+            return;
+        }
+        if (PROFILE_DECISION_COMMANDS.contains(command.commandType())) {
+            UserAccount account = access.requireActive(caller, now);
+            if (!access.hasRole(account.getId(), HrisRole.HR_ADMIN, now)) {
+                throw new AccessDeniedException("Role " + HrisRole.HR_ADMIN + " is required");
+            }
+            return;
+        }
+        if (PROFILE_OPERATOR_COMMANDS.contains(command.commandType())
+            || RULE_COMMANDS.contains(command.commandType())) {
+            access.requireHrOperation(caller, now);
+            return;
+        }
         if (!HR_COMMANDS.contains(command.commandType())) {
             throw new AccessDeniedException("Command is not permitted for this caller");
         }
@@ -75,11 +116,59 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         }
     }
 
+    private void requireBoundEmployee(Authentication caller, Instant now) {
+        UserAccount account = access.requireActive(caller, now);
+        if (!access.hasRole(account.getId(), HrisRole.EMPLOYEE, now)) {
+            throw new AccessDeniedException("Employee actions require an effective EMPLOYEE grant");
+        }
+        if (access.ownEmployeePublicId(account).isEmpty()) {
+            throw new AccessDeniedException("Caller has no bound employee record");
+        }
+    }
+
     @Override
     public void checkReplay(Authentication caller, CommandContext command, String recordedResult) {
         checkCommand(caller, command);
         if (COMMAND_ACTIVATE.equals(command.commandType())) {
             checkActivationReplay(caller, recordedResult);
+            return;
+        }
+        if (PROFILE_OWNER_COMMANDS.contains(command.commandType())) {
+            UUID ownerProposal = recordedProposal(recordedResult);
+            proposals.lockForReplay(ownerProposal);
+            proposals.requireOwnershipForReplay(ownerProposal, caller);
+            return;
+        }
+        if (PROFILE_DECISION_COMMANDS.contains(command.commandType())) {
+            UUID proposalPublicId = recordedProposal(recordedResult);
+            ReplaySnapshot snapshot = proposals.lockForReplay(proposalPublicId);
+            proposals.requireHrScopeForReplay(proposalPublicId, caller);
+            if (snapshot.assigneeAccountPublicId() != null) {
+                requireSnapshotAssignee(snapshot, caller);
+                return;
+            }
+            UUID recordedAssignmentId = recordedAssignment(recordedResult);
+            if (!proposals.isTerminalAssignment(proposalPublicId, recordedAssignmentId)) {
+                throw new AccessDeniedException("Recorded review assignment is no longer current");
+            }
+            return;
+        }
+        if (PROFILE_OPERATOR_COMMANDS.contains(command.commandType())) {
+            if ("PROFILE_MASTER_CORRECT".equals(command.commandType())) {
+                requireMasterCorrectReplay(caller, recordedResult);
+                return;
+            }
+            UUID operatorProposal = recordedProposal(recordedResult);
+            proposals.lockForReplay(operatorProposal);
+            proposals.requireHrScopeForReplay(operatorProposal, caller);
+            return;
+        }
+        if (RULE_COMMANDS.contains(command.commandType())) {
+            if ("PROFILE_RULE_ACTIVATE".equals(command.commandType())) {
+                approvalRules.verifyActivateReplayScope(recordedRuleSet(recordedResult), caller);
+            } else {
+                approvalRules.verifyPublishReplayScope(recordedRuleSet(recordedResult), caller);
+            }
             return;
         }
         Instant now = Instant.now(clock);
@@ -129,6 +218,40 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         if (!access.hasRole(account.getId(), HrisRole.HR_ADMIN, now)) {
             throw new AccessDeniedException("Role " + HrisRole.HR_ADMIN + " is required");
         }
+    }
+
+    private void requireSnapshotAssignee(ReplaySnapshot snapshot, Authentication caller) {
+        if (snapshot.assigneeAccountPublicId() == null) {
+            return;
+        }
+        UserAccount account = access.requireActive(caller, Instant.now(clock));
+        if (!snapshot.assigneeAccountPublicId().equals(account.getPublicId())) {
+            throw new AccessDeniedException("Recorded review assignment is no longer current");
+        }
+    }
+
+    private void requireMasterCorrectReplay(Authentication caller, String recordedResult) {
+        JsonNode result = recordedResult(recordedResult);
+        UUID employeePublicId = requiredId(result, "employeePublicId");
+        proposals.lockContactForReplay(employeePublicId);
+        Instant now = Instant.now(clock);
+        UserAccount account = access.requireHrOperation(caller, now);
+        String unit = employees.findByPublicId(employeePublicId)
+            .flatMap(employee -> employees.currentOrgUnit(employee.getId(), now))
+            .orElse(null);
+        access.requireTargetScope(account.getId(), unit, now);
+    }
+
+    private UUID recordedProposal(String recordedResult) {
+        return requiredId(recordedResult(recordedResult), "proposalPublicId");
+    }
+
+    private UUID recordedAssignment(String recordedResult) {
+        return requiredId(recordedResult(recordedResult), "assignmentPublicId");
+    }
+
+    private UUID recordedRuleSet(String recordedResult) {
+        return requiredId(recordedResult(recordedResult), "ruleSetPublicId");
     }
 
     private void checkActivationReplay(Authentication caller, String recordedResult) {

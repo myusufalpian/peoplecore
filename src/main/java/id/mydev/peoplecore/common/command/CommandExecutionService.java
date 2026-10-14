@@ -35,6 +35,7 @@ public class CommandExecutionService {
     private final CommandResultSerializer serializer;
     private final CommandExecutionCoordinator coordinator;
     private final CurrentAccessPolicy accessPolicy;
+    private final AdmissionGuard admissionGuard;
     private final EntityManager entities;
 
     public CommandExecutionService(
@@ -44,6 +45,7 @@ public class CommandExecutionService {
         CommandResultSerializer serializer,
         CommandExecutionCoordinator coordinator,
         CurrentAccessPolicy accessPolicy,
+        AdmissionGuard admissionGuard,
         EntityManager entities
     ) {
         this.commandReceiptRepository = commandReceiptRepository;
@@ -52,6 +54,7 @@ public class CommandExecutionService {
         this.serializer = serializer;
         this.coordinator = coordinator;
         this.accessPolicy = accessPolicy;
+        this.admissionGuard = admissionGuard;
         this.entities = entities;
     }
 
@@ -132,6 +135,10 @@ public class CommandExecutionService {
         var caller = CurrentCaller.require();
         if (!caller.getName().equals(context.actorId())) {
             throw new AccessDeniedException("Command actor does not match authenticated caller");
+        }
+        AdmissionGuard.Mode admission = admissionGuard.modeForCommand(context.commandType());
+        if (admission != null) {
+            admissionGuard.acquire(admission);
         }
         accessPolicy.checkCommand(caller, context);
         String requestHash = coordinator.requestHash(context.requestPayload());

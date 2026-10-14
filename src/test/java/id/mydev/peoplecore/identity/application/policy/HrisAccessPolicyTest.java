@@ -12,6 +12,8 @@ import id.mydev.peoplecore.identity.domain.repository.AccountBindingRepository;
 import id.mydev.peoplecore.identity.domain.repository.RoleAssignmentRepository;
 import id.mydev.peoplecore.identity.domain.repository.UserAccountRepository;
 import id.mydev.peoplecore.organization.application.service.EmployeeService;
+import id.mydev.peoplecore.organization.application.service.ProfileProposalService;
+import id.mydev.peoplecore.approval.application.service.ApprovalRuleService;
 import id.mydev.peoplecore.organization.domain.model.Employee;
 import id.mydev.peoplecore.support.JwtAuthFixture;
 import org.junit.jupiter.api.AfterEach;
@@ -50,10 +52,13 @@ class HrisAccessPolicyTest {
     private final AuthGenerationService generations = mock(AuthGenerationService.class);
     private final EmployeeService employees = mock(EmployeeService.class);
     private final EnrollmentService enrollments = mock(EnrollmentService.class);
+    private final ProfileProposalService proposals = mock(ProfileProposalService.class);
+    private final ApprovalRuleService approvalRules = mock(ApprovalRuleService.class);
     private final AccountAccessService access =
         new AccountAccessService(accounts, roles, bindings, generations, CLOCK);
     private final HrisAccessPolicy policy =
-        new HrisAccessPolicy(access, employees, enrollments, new ObjectMapper(), CLOCK);
+        new HrisAccessPolicy(access, employees, enrollments, proposals, approvalRules,
+            new ObjectMapper(), CLOCK);
 
     @AfterEach
     void clearCaller() {
@@ -130,6 +135,14 @@ class HrisAccessPolicyTest {
             "{\"employeeId\":\"" + EMPLOYEE_ID + "\",\"roles\":[\"EMPLOYEE\"],\"scope\":null}"));
         policy.checkReplay(caller("hr-1"), context,
             "{\"employeeId\":\"" + EMPLOYEE_ID + "\",\"roles\":[\"EMPLOYEE\"],\"scope\":\"ENG\"}");
+    }
+
+    @Test
+    void activationReplayAllowsMatchingVerifiedIdentity() {
+        when(enrollments.activationReplayAllowed(INVITATION_ID, ISSUER, "emp-1", EMPLOYEE_ID)).thenReturn(true);
+        policy.checkReplay(caller("emp-1"), command("emp-1", HrisAccessPolicy.COMMAND_ACTIVATE),
+            "{\"invitationId\":\"" + INVITATION_ID + "\",\"employeeId\":\"" + EMPLOYEE_ID
+                + "\",\"issuer\":\"" + ISSUER + "\",\"subject\":\"emp-1\"}");
     }
 
     @Test

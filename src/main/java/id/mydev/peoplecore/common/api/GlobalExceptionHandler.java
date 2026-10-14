@@ -9,9 +9,20 @@ import id.mydev.peoplecore.identity.domain.exception.InvalidRoleException;
 import id.mydev.peoplecore.identity.domain.exception.InvitationConflictException;
 import id.mydev.peoplecore.identity.domain.exception.InvitationExpiredException;
 import id.mydev.peoplecore.identity.domain.exception.LifecycleConflictException;
+import id.mydev.peoplecore.approval.domain.exception.RuleActivationException;
+import id.mydev.peoplecore.approval.domain.exception.RulePublishException;
 import id.mydev.peoplecore.organization.domain.exception.AssignmentOverlapException;
 import id.mydev.peoplecore.organization.domain.exception.AssignmentValidationException;
 import id.mydev.peoplecore.organization.domain.exception.EmployeeNumberConflictException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileAssignmentStaleException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileConflictException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileInvalidStateException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileNoChangeException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileOpenProposalException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileRemovalDisabledException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileReviewerIneligibleException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileStaleVersionException;
+import id.mydev.peoplecore.organization.domain.exception.ProfileValidationException;
 import id.mydev.peoplecore.organization.domain.exception.UnknownOrgUnitException;
 import org.springframework.http.MediaType;
 import org.slf4j.Logger;
@@ -160,6 +171,72 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> handleInvalidRole(InvalidRoleException ex) {
         return ResponseEntity.badRequest()
             .body(ErrorResponse.of("INVALID_ROLE", "Role yang diminta tidak valid."));
+    }
+
+    @ExceptionHandler(ProfileValidationException.class)
+    public ResponseEntity<ErrorResponse> handleProfileValidation(ProfileValidationException ex) {
+        return ResponseEntity.badRequest()
+            .body(ErrorResponse.of("PROFILE_VALIDATION_FAILED", "Data profil yang diajukan tidak valid."));
+    }
+
+    @ExceptionHandler(ProfileNoChangeException.class)
+    public ResponseEntity<ErrorResponse> handleProfileNoChange(ProfileNoChangeException ex) {
+        return ResponseEntity.badRequest()
+            .body(ErrorResponse.of("PROFILE_NO_CHANGE", "Perubahan yang diajukan tidak mengubah data aktif."));
+    }
+
+    @ExceptionHandler(ProfileRemovalDisabledException.class)
+    public ResponseEntity<ErrorResponse> handleProfileRemovalDisabled(ProfileRemovalDisabledException ex) {
+        return ResponseEntity.badRequest()
+            .body(ErrorResponse.of("PROFILE_REMOVAL_DISABLED", "Penghapusan nilai profil tidak diizinkan."));
+    }
+
+    @ExceptionHandler(RulePublishException.class)
+    public ResponseEntity<ErrorResponse> handleRulePublish(RulePublishException ex) {
+        return ResponseEntity.badRequest()
+            .body(ErrorResponse.of("PROFILE_RULE_PUBLISH_INVALID", "Konfigurasi aturan persetujuan tidak valid."));
+    }
+
+    @ExceptionHandler(ProfileOpenProposalException.class)
+    public ResponseEntity<ErrorResponse> handleProfileOpenProposal(ProfileOpenProposalException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("PROFILE_OPEN_PROPOSAL_EXISTS", "Karyawan sudah memiliki usulan profil yang terbuka."));
+    }
+
+    @ExceptionHandler(ProfileStaleVersionException.class)
+    public ResponseEntity<ErrorResponse> handleProfileStaleVersion(ProfileStaleVersionException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("PROFILE_STALE_VERSION", "Usulan profil telah berubah, silakan muat ulang."));
+    }
+
+    @ExceptionHandler(ProfileInvalidStateException.class)
+    public ResponseEntity<ErrorResponse> handleProfileInvalidState(ProfileInvalidStateException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("PROFILE_INVALID_STATE", "Aksi tidak diizinkan pada status usulan saat ini."));
+    }
+
+    @ExceptionHandler(ProfileAssignmentStaleException.class)
+    public ResponseEntity<ErrorResponse> handleProfileAssignmentStale(ProfileAssignmentStaleException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("PROFILE_ASSIGNMENT_STALE", "Penugasan review tidak lagi berlaku."));
+    }
+
+    @ExceptionHandler(ProfileConflictException.class)
+    public ResponseEntity<ErrorResponse> handleProfileConflict(ProfileConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("PROFILE_CHANGE_CONFLICT", "Data aktif berubah selama review; kembalikan untuk revisi."));
+    }
+
+    @ExceptionHandler(ProfileReviewerIneligibleException.class)
+    public ResponseEntity<ErrorResponse> handleProfileReviewerIneligible(ProfileReviewerIneligibleException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("PROFILE_REVIEWER_INELIGIBLE", "Reviewer yang ditunjuk tidak memenuhi syarat."));
+    }
+
+    @ExceptionHandler(RuleActivationException.class)
+    public ResponseEntity<ErrorResponse> handleRuleActivation(RuleActivationException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("PROFILE_RULE_ACTIVATION_INVALID", "Aturan persetujuan tidak dapat diaktifkan."));
     }
 
     @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)

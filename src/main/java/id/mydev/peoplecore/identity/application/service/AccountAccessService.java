@@ -186,6 +186,12 @@ public class AccountAccessService {
     }
 
     @Transactional(readOnly = true)
+    public Optional<UserAccount> findAccountByPublicId(UUID publicId) {
+        Objects.requireNonNull(publicId, "publicId must not be null");
+        return accounts.findByPublicId(publicId);
+    }
+
+    @Transactional(readOnly = true)
     public Optional<UUID> ownEmployeePublicId(UserAccount account) {
         Objects.requireNonNull(account, "account must not be null");
         return bindings.findByAccountIdAndRevokedAtIsNull(account.getId())
