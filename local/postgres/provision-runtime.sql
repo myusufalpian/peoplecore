@@ -8,6 +8,11 @@ SELECT format('ALTER ROLE peoplecore_runtime PASSWORD %L', :'runtime_password') 
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON command_receipts, outbox_events, user_accounts, employees TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON profile_rule_sets, profile_rules, profile_rule_current_activation TO peoplecore_runtime;
+GRANT SELECT, INSERT ON profile_rule_activations TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON employee_contact_profile, profile_proposal, profile_assignment TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON profile_revision TO peoplecore_runtime;
+GRANT SELECT, INSERT ON profile_revision_change, profile_decision, profile_route_evaluation TO peoplecore_runtime;
 REVOKE ALL ON audit_events FROM peoplecore_runtime;
 GRANT SELECT, INSERT ON audit_events TO peoplecore_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO peoplecore_runtime;

@@ -1,6 +1,6 @@
 # Implementation Overview
 
-Peoplecore implements employee records, effective-dated organization assignments, and identity enrollment on a Spring Boot backend. PostgreSQL stores domain state, command receipts, append-only audit records, and pending outbox events. The API uses public UUIDs for employee, assignment, and invitation references.
+Peoplecore implements employee records, effective-dated organization assignments, identity enrollment, and reviewed contact-profile changes on a Spring Boot backend. PostgreSQL stores domain state, command receipts, append-only audit records, and pending outbox events. Public API references use UUIDs.
 
 ## Delivered capabilities
 
@@ -12,6 +12,9 @@ Peoplecore implements employee records, effective-dated organization assignments
 - Typed success/error responses, centralized exception mapping, correlation IDs, bounded JSON input, and CSRF protection for applicable requests.
 - Canonical request hashing, idempotency receipts, PostgreSQL advisory locks, and atomic domain/receipt/audit/outbox writes.
 - Explicit Flyway migrations, schema validation, runtime database-role checks, dependency inventories, and vulnerability-gate tooling.
+- Bounded profile-rule publication, organization-wide global activation, and shared preview/submission evaluation with a designated HR reviewer.
+- Employee-owned proposals, separate active contact values, return/edit/resubmit, reasoned HR decisions/reassignment, and explicit blocked-route recovery.
+- Database-sealed content, touched-field conflict counters, scoped queues/history, current receipt authorization, and atomic approval/application.
 
 HTTP DTO mappers, application result mappers, and audit/outbox trail mappers keep representation logic separate from mutation services.
 
@@ -114,6 +117,90 @@ Validation failures use field/message pairs:
 
 Errors omit `details` when no field-level details exist. Security handlers provide the appropriate authentication challenge. Malformed input, access denial, missing resources, conflicts, oversized bodies, throttling, and service failures use typed HTTP errors rather than a success flag.
 
+## Contact-profile API
+
+All paths below are under `/api/v1`. Mutations require the same verified JWT and `Idempotency-Key` headers as the employee APIs.
+
+| Method | Path | Request / purpose |
+| --- | --- | --- |
+| POST | `/employees/me/profile-proposals` | `changes`; create one open owner proposal, 201 |
+| PATCH | `/profile-proposals/{id}` | `expectedVersion`, `changes`; edit DRAFT or RETURNED without applying active values |
+| POST | `/profile-proposals/{id}/submit` | `expectedVersion`; submit DRAFT |
+| POST | `/profile-proposals/{id}/resubmit` | `expectedVersion`, `changes`; create a freshly evaluated revision from RETURNED |
+| POST | `/profile-proposals/{id}/withdraw` | `expectedVersion`; owner pre-approval withdrawal |
+| POST | `/profile-proposals/{id}/{approve,reject,return}` | `expectedVersion`, `revisionId`, `assignmentId`, `reason?`; assigned eligible HR only, reason mandatory for reject/return |
+| POST | `/profile-proposals/{id}/reassign` | `expectedVersion`, `assignmentId`, `replacementAccountId`, `reason`; scoped HR recovery |
+| POST | `/profile-proposals/{id}/retry-route` | `expectedVersion`; scoped HR reevaluates blocked routing against pinned original inputs |
+| GET | `/profile-proposals/{id}` | Scoped proposal detail and reviewed values |
+| GET | `/profile-proposals/{id}/history` | Bounded revision/decision/evaluation/reassignment history |
+| GET | `/profile-proposals?page=0&size=20` | Current HR scope-filtered queue |
+| GET | `/employees/me/contact-profile` | Owner active contact values and four group-version counters |
+| PATCH | `/employees/{id}/contact-profile` | Scoped HR correction; `changes`, `reason`, `expectedPhoneVersion`, `expectedEmailVersion`, `expectedAddressVersion`, `expectedEmergencyVersion` |
+| POST | `/approval/profile-rule-sets` | `rules`; scoped snapshot publication, 201 |
+| POST | `/approval/profile-rule-sets/{id}/activate` | No JSON body; organization-wide HR required for global pointer activation |
+| POST | `/approval/profile-routes/preview` | `orgUnit`, `jobLevel`, optional `employeeId`; HR-only advisory route |
+
+Proposal mutation results contain `proposalId`, `employeeId`, `state`, `proposalVersion`, `revisionId`, `revisionNumber`, `assignmentId`, and `blockedReason`. Read the returned version and current revision/assignment before forming the next command; do not infer them from a previous screen. A valid blocked submission still returns 200 and PENDING. Approval alone changes active contact values; return, reject and withdrawal do not.
+
+Detail includes `availableActions`, calculated for the current caller and state: owner actions `EDIT`, `SUBMIT`, `RESUBMIT`, `WITHDRAW`; eligible assigned-reviewer actions `APPROVE`, `REJECT`, `RETURN`; scoped HR recovery `REASSIGN`, `RETRY_ROUTING`. Only currently applicable actions appear and terminal proposals have none. The list helps clients render controls; each command independently rechecks access/version/state and is never authorized by a stale action list.
+
+History accepts `page`, `size`, `decisionPage`, `evaluationPage`, and `assignmentPage`; defaults are page 0/size 20. Size is 1–100 and all page numbers must be nonnegative. The revision page is independent of the other three proposal-wide pages. Metadata includes all four page numbers and `totalRevisions`, `totalDecisions`, `totalEvaluations`, `totalAssignments`. Continue each collection until its total is reached: `GET /profile-proposals/{id}/history?page=0&size=100&evaluationPage=1` returns older evaluations even when there is only one revision. Decisions/evaluations are latest-first with stable ID tie-breaking; reviewer assignments are chronological. Child records include public revision IDs, decisions also assignment IDs, and assignment history includes reviewer/status/reason/actor/creation/closure evidence.
+
+Each revision exposes `orgAssignmentId`, `orgAssignmentPredecessorId`, and `organizationContextStatus`: `RESOLVED` identifies the immutable effective organization-assignment row selected for submission, `NOT_EVALUATED` describes unsent content, and `UNKNOWN` explicitly represents legacy evaluated context that cannot be reconstructed. Supersession does not rewrite prior snapshots. Do not confuse these IDs with approval reviewer assignment IDs.
+
+The payload uses a bounded change list rather than an employee-shaped object. Omitted entries mean unchanged; explicit null/blank values, unknown names, duplicates, and removals are rejected. The four versioned groups are personal phone, personal email, residential address, and emergency contact. Emergency contact requires all three entries (`emergencyContactName`, `emergencyContactRelationship`, `emergencyContactPhone`) together. This does not alter account email or identity binding.
+
+Create a phone proposal:
+
+```bash
+curl --fail-with-body -X POST http://localhost:8080/api/v1/employees/me/profile-proposals \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: contact-phone-2026-10-14' \
+  --data '{"changes":[{"fieldName":"personalPhone","proposedValue":"+62 812 3456 7890"}]}'
+```
+
+Then submit with `POST /profile-proposals/{proposalId}/submit` and `{"expectedVersion":0}` only if the creation response actually returned version 0. Use a distinct idempotency key for the submit command. After a return, PATCH saves edited content while retaining RETURNED; resubmit is a separate command carrying the confirmed full change list and current version.
+
+For the following commands, set `PROPOSAL_ID` and `PROPOSAL_VERSION` from the latest successful response. Use the employee token for submission:
+
+```bash
+curl --fail-with-body -X POST "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID/submit" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: contact-phone-submit-2026-10-14' \
+  --data "{\"expectedVersion\":$PROPOSAL_VERSION}"
+```
+
+An eligible assigned reviewer first reads proposal detail using their own token. The current identifiers are under `data.proposal`; set `PROPOSAL_VERSION`, `REVISION_ID`, and `ASSIGNMENT_ID` from that object before deciding. A blocked proposal has no active reviewer assignment and needs scoped HR recovery rather than approval.
+
+```bash
+curl --fail-with-body "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID" \
+  -H "Authorization: Bearer $REVIEWER_ACCESS_TOKEN"
+
+curl --fail-with-body -X POST "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID/approve" \
+  -H "Authorization: Bearer $REVIEWER_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: contact-phone-approve-2026-10-14' \
+  --data "{\"expectedVersion\":$PROPOSAL_VERSION,\"revisionId\":\"$REVISION_ID\",\"assignmentId\":\"$ASSIGNMENT_ID\"}"
+```
+
+For rejection or return, use the corresponding path and include a nonblank `reason` of at most 1,000 characters. After RETURNED, the owner edits with PATCH using `expectedVersion` and `changes`, then resubmits with a new key and the returned version. Both editing and resubmitting accept the complete desired proposal change list, not a partial merge with the previous revision.
+
+Read successive history pages with the token of a currently authorized owner or scoped HR account. Advance only the collection whose next page is needed; revision `page` is oldest-first, while decisions and evaluations are latest-first. Response arrays are under `data`, and counts/page positions are under `metadata`.
+
+```bash
+curl --fail-with-body \
+  "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID/history?page=0&size=100&decisionPage=0&evaluationPage=1&assignmentPage=0" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+For an HR contact correction, include the four expected counters using the JSON names in the API table. The service checks counters for the groups present in `changes`; untouched groups retain their values and counters. The owner contact-profile read returns `phoneVersion`, `emailVersion`, `addressVersion`, and `emergencyVersion`. There is no separate HR contact-profile GET route; do not construct one from the correction path.
+
+Rule publication uses `{"rules":[{"ruleId":"eng-contact","priority":10,"orgUnit":"ENG","jobLevel":null,"reviewerAccountId":"<designated-account-uuid>"}]}`. The example UUID placeholder must be replaced with a real eligible account. Publishing a scoped snapshot does not grant activation rights: changing the global pointer requires organization-wide HR. Preview never reserves a reviewer; submission records its actual result. Retry and reassignment append evidence and cannot overwrite the original submission route/content.
+
+Operation or owner-binding denial is 403. Proposal reads and HR decision/reassignment/retry commands return 404 for missing or out-of-scope resources before disclosing state/version. Stale versions/assignments, one-open conflicts, inactive reviewers, and same-field conflicts return 409. A touched-group conflict requires return, owner confirmation and fresh resubmission; there is no force-approval path. SYSTEM_ADMIN, manager and Finance roles alone grant no profile review/disclosure authority.
+
 ## Command and operational boundaries
 
 Command identity is scoped by actor, command type, and idempotency key. Equivalent canonical payloads replay a successful result after current authorization is rechecked; changing the payload under the same identity returns `409`. Domain mutations, receipts, audit records, and outbox records share a transaction. Activation admission and rejection audit use the separate transactions described above. Receipts carry a seven-day retention deadline.
@@ -132,4 +219,6 @@ The verification path is:
 ./gradlew check bootJar --no-daemon --console=plain
 ```
 
-The latest recorded verification contains 205 tests: 204 passed and one optional R2 test skipped. All 61 PostgreSQL integration tests passed. Merged JaCoCo coverage was 96.54% line and 86.18% branch, exceeding the configured 85% gates. These are recorded implementation results; the documentation update itself changes no runtime behavior.
+Local verification on October 14, 2026 ran `check bootJar` successfully after all acceptance corrections. Unit/JPA/HTTP: 260 cases, 259 passed and one pre-existing optional skip. PostgreSQL: 89 cases, all passed, including 15 workflow concurrency/rollback cases. Merged coverage is 3,661/3,804 lines (96.24%) and 1,118/1,253 branches (89.23%); both 85% gates pass. The application JAR built successfully.
+
+Local verification and remote required-check enforcement are separate evidence. A remote CI run for the delivered revision and repository protection settings remain unverified. Frontend delivery, notification delivery and production readiness remain outside the implemented backend scope.
