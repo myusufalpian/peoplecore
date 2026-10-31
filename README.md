@@ -1,6 +1,6 @@
 # Peoplecore Backend
 
-Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, and reviewed contact-profile changes through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
+Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, reviewed contact-profile changes, attendance, and annual leave through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
 
 ## Technology stack
 
@@ -26,8 +26,10 @@ src/main/java/id/mydev/peoplecore/
 ├── common/outbox    pending events stored within the command transaction
 ├── common/security  authentication, authorization, correlation IDs, and payload limits
 ├── identity/        accounts, effective roles, enrollment, bindings, access lifecycle
-├── approval/        typed profile rule snapshots, activation, route evaluator/preview
+├── approval/        shared admission, profile rule snapshots, activation, route preview
 ├── organization/    employees, assignments, contact profiles, proposals, review history
+├── attendance/      schedules, calendars, canonical occurrences, clock events, corrections
+├── leave/           annual entitlements, ledger, request review, cancellation
 └── infrastructure/  migrations, runtime database checks, and runtime configuration
 ```
 
@@ -76,7 +78,7 @@ Enrollment supports invitation issuance/reissue, activation, offboarding, rebind
 
 Business endpoints require a verified JWT identity. Account status, access cutoff, active database role assignments, and current organization scope determine access; token role claims do not grant HRIS roles. Own-employee reads require a current binding and an effective role. Invitation issue/reissue and identity rebind require both applicable HR scope and an effective organization-wide `SYSTEM_ADMIN` grant. The shared HTTP chain retains Basic authentication, but Basic credentials do not satisfy these business identity checks.
 
-Sprint 4 attendance and annual-leave APIs are implemented under `/api/v1/attendance`, `/api/v1/leave`, `/api/v1/employees/{id}/work-context`, and `/api/v1/approval/{attendance,leave}-rule-sets`. They cover schedule/calendar revision catalogs and assignments, clock actions and correction history, annual entitlement/ledger, leave requests and whole cancellation. Mutations require the shared idempotent command contract; owner, current reviewer and scoped-HR access is rechecked on reads, commands and replay. The [Sprint 4 technical design](docs/SPRINT_4_TECHNICAL_DESIGN_2026-10-15.md) documents the routes, payloads, lock order and boundary rules. Local implementation evidence and the remaining remote-CI gate are in the [Sprint 4 audit closure](docs/SPRINT_4_AUDIT_REMEDIATION_CLOSURE_2026-10-18.md).
+Attendance and annual-leave APIs use `/api/v1/attendance`, `/api/v1/leave`, `/api/v1/employees/{id}/work-context`, and `/api/v1/approval/{attendance,leave}-rule-sets`. They cover schedule/calendar revision catalogs and assignments, clock actions and correction history, annual entitlement/ledger, leave requests and whole cancellation. Owner, current reviewer and scoped-HR access is rechecked on reads, commands and replay. Module ownership, lock order and canonical evidence are described in [architecture.md](architecture.md#attendance-and-annual-leave).
 
 Mutations require `Idempotency-Key`. Command receipts, before/after audit details where applicable, and outbox records commit atomically with domain changes. Replay rechecks current authorization, and changed payloads conflict. Outbox records are durable pending events; persisting one does not mean an external provider has delivered a notification.
 
@@ -103,7 +105,7 @@ export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
 docker compose --profile provision run --rm postgres-runtime-provision
 ```
 
-The provisioning script grants foundation and contact-profile approval permissions, including append-only history and audit access. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
+The provisioning script grants common command, contact-profile, attendance and leave permissions, including append-only history and audit access. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
 
 ```sql
 GRANT SELECT, INSERT, UPDATE, DELETE ON
@@ -143,18 +145,21 @@ HR publishes reusable immutable configuration with `POST /api/v1/attendance/sche
 
 Use `POST /api/v1/attendance/publish-preview` before assigning a revision. Assignment commands under `/api/v1/employees/{employeeId}/schedule-assignments` and `/calendar-assignments` require `expectedFingerprint`; stale context returns 409 and requires a new preview. Publish itself has no fingerprint because applicability changes only with assignments. Backdated assignments require a reason. `GET /api/v1/employees/{employeeId}/work-context?from=2026-10-01&to=2026-11-01` returns the half-open range, at most 366 days, without pinning evidence. Missing context appears as a per-date blockedReason. Owner reads require a current binding and effective role; HR reads require current target coverage.
 
-Apply migrations using owner credentials before rerunning `local/postgres/provision-runtime.sql` for runtime grants. V14 supplies context storage and V15 seals assignment provenance. See [architecture](architecture.md#attendance-and-annual-leave) for admission ordering, canonical evidence and delivery boundaries.
+Apply migrations using owner credentials before rerunning `local/postgres/provision-runtime.sql` for runtime grants. V14 supplies context storage, V15 seals assignment provenance, and V16–V18 define attendance recording, entitlement and leave workflow storage. All application instances must participate in the shared `profile-admission` protocol to coordinate context and authority changes with reads and commands. See [architecture](architecture.md#attendance-and-annual-leave) for admission ordering and canonical evidence.
 
 Security artifacts include `*-all-severities.json`, the HIGH/CRITICAL gate report, and `*-review.json` with remediation ownership/decision status. Review lower-severity results even when the gate passes.
 
-### Sprint 4 delivery verification
+### Local image security checks
 
-Local acceptance is complete; formal delivery still requires a passing remote run for the final commit. The maintainer must record its commit SHA and run URL, confirm that branch protection requires the `check` job in the `Backend checks` workflow, and retain the uploaded test, coverage and security reports. The workflow rebuilds service images, runs the full Gradle gate and scans dependencies/images with Trivy; allow the scanner to refresh its vulnerability database. A passing run for an earlier commit does not close this gate.
+Local service Dockerfiles pin their base images and apply fixed minimum Alpine package versions. The Keycloak helper also pins Guava, MariaDB and OpenTelemetry API/context JARs by SHA256, runs Quarkus augmentation, and copies the patched distribution into a clean runtime stage. Bootstrap aliases resolve to the patched JARs.
 
-Before endpoint enablement, the deployment owner must verify that every serving replica participates in the shared `profile-admission` protocol, apply V14–V18 with migration-owner credentials, rerun runtime provisioning, and confirm approved schedule, calendar, entitlement and reviewer configuration. Record the deployed revision and replica verification with the delivery evidence.
+Build the backend and service images before scanning their dependencies:
 
-The October 31 local security refresh rebuilt the backend and service images using Trivy 0.75.0 with vulnerability and Java databases updated that day. New image findings were fixed with updated Alpine packages and checksum-pinned Guava, MariaDB and OpenTelemetry API/context JARs in the local Keycloak helper. Its clean final stage contains the patched distribution; Quarkus compatibility aliases point to the verified new JAR bytes. The full security gate passed with zero findings across five targets, and PostgreSQL readiness/query, SQS send/receive/delete and Keycloak PKCE smoke checks passed. Before/after reports are in `build/reports/security/2026-10-31` and `build/reports/security/2026-10-31-after`; the latter includes `followup-summary.json`. These checks do not replace the remote gate for the final commit.
+```bash
+./gradlew bootJar
+docker compose build
+python3 -m unittest discover -s local/security -p 'test_*.py'
+bash local/security/check.sh
+```
 
-The user selected a dummy local workload for the availability follow-up. On October 31 an isolated PostgreSQL fixture with one employee, one five-weekday schedule, an empty calendar and no pins completed five warmups per operation, then 40 baseline reads and 20 baseline writes. Four concurrent readers completed 80 requests for 366-day context alongside 20 preview/revise writes. Read p95 was 36.07 ms baseline and 195.05 ms mixed; write p95 was 79.75 ms and 384.36 ms. There were zero errors and no new pins. Results, workload and reproduction harness are in `build/reports/performance/2026-10-31/`.
-
-This short single-run baseline measures direct service calls with a four-connection pool during concurrent image builds. It excludes HTTP/JWT/network, authority mutations and multiple replicas; sampled waiter counts are not measured lock-wait durations. Deployment owners must still agree on production workload and latency/error budgets and verify them before rollout. Route measured implementation failures to code review and security failures to security review.
+The scanner defaults to `trivy`; set `TRIVY_BIN` to use another executable path and `SECURITY_REPORT_DIR` to change the report directory. `local/security/check.sh` produces backend/image SBOMs, verifies the SQS runtime JAR inventory, scans every severity, and confirms that a vulnerable fixture fails the HIGH/CRITICAL gate. The `Backend checks` workflow runs the Gradle checks, local service contract checks, and security scans, then uploads their reports.
