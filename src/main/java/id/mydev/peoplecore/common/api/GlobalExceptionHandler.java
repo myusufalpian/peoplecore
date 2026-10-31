@@ -24,6 +24,8 @@ import id.mydev.peoplecore.organization.domain.exception.ProfileReviewerIneligib
 import id.mydev.peoplecore.organization.domain.exception.ProfileStaleVersionException;
 import id.mydev.peoplecore.organization.domain.exception.ProfileValidationException;
 import id.mydev.peoplecore.organization.domain.exception.UnknownOrgUnitException;
+import id.mydev.peoplecore.attendance.domain.exception.ContextChangedException;
+import id.mydev.peoplecore.attendance.domain.exception.WorkContextException;
 import org.springframework.http.MediaType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +56,11 @@ import java.util.List;
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(id.mydev.peoplecore.leave.application.service.LeaveConflictException.class)
+    public ResponseEntity<ErrorResponse> handleLeaveConflict(id.mydev.peoplecore.leave.application.service.LeaveConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of("LEAVE_CONFLICT", ex.getMessage()));
+    }
 
     @ExceptionHandler(CommandConflictException.class)
     public ResponseEntity<ErrorResponse> handleCommandConflict(CommandConflictException ex) {
@@ -237,6 +244,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> handleRuleActivation(RuleActivationException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
             .body(ErrorResponse.of("PROFILE_RULE_ACTIVATION_INVALID", "Aturan persetujuan tidak dapat diaktifkan."));
+    }
+
+    @ExceptionHandler(WorkContextException.class)
+    public ResponseEntity<ErrorResponse> handleWorkContext(WorkContextException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of(ex.getReason(), "Konteks kerja tidak dapat ditentukan."));
+    }
+
+    @ExceptionHandler(ContextChangedException.class)
+    public ResponseEntity<ErrorResponse> handleContextChanged(ContextChangedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse.of("CONTEXT_CHANGED", "Konteks berubah sejak preview, buat preview baru."));
     }
 
     @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)

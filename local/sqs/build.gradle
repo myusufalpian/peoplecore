@@ -4,7 +4,11 @@ import java.security.MessageDigest
 plugins { id 'base' }
 repositories { mavenCentral() }
 configurations { sqsRuntime }
-dependencies { sqsRuntime 'org.elasticmq:elasticmq-server_2.13:1.7.1' }
+dependencies {
+    sqsRuntime 'org.elasticmq:elasticmq-server_2.13:1.7.1'
+    sqsRuntime 'ch.qos.logback:logback-core:1.6.5'
+    sqsRuntime 'ch.qos.logback:logback-classic:1.6.5'
+}
 
 tasks.register('stageRuntime', Sync) {
     from(configurations.sqsRuntime) { into 'lib' }

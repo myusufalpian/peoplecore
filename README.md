@@ -1,6 +1,6 @@
 # Peoplecore Backend
 
-Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, and reviewed contact-profile changes through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
+Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, reviewed contact-profile changes, attendance, and annual leave through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
 
 ## Technology stack
 
@@ -26,8 +26,10 @@ src/main/java/id/mydev/peoplecore/
 ├── common/outbox    pending events stored within the command transaction
 ├── common/security  authentication, authorization, correlation IDs, and payload limits
 ├── identity/        accounts, effective roles, enrollment, bindings, access lifecycle
-├── approval/        typed profile rule snapshots, activation, route evaluator/preview
+├── approval/        shared admission, profile rule snapshots, activation, route preview
 ├── organization/    employees, assignments, contact profiles, proposals, review history
+├── attendance/      schedules, calendars, canonical occurrences, clock events, corrections
+├── leave/           annual entitlements, ledger, request review, cancellation
 └── infrastructure/  migrations, runtime database checks, and runtime configuration
 ```
 
@@ -76,6 +78,8 @@ Enrollment supports invitation issuance/reissue, activation, offboarding, rebind
 
 Business endpoints require a verified JWT identity. Account status, access cutoff, active database role assignments, and current organization scope determine access; token role claims do not grant HRIS roles. Own-employee reads require a current binding and an effective role. Invitation issue/reissue and identity rebind require both applicable HR scope and an effective organization-wide `SYSTEM_ADMIN` grant. The shared HTTP chain retains Basic authentication, but Basic credentials do not satisfy these business identity checks.
 
+Attendance and annual-leave APIs use `/api/v1/attendance`, `/api/v1/leave`, `/api/v1/employees/{id}/work-context`, and `/api/v1/approval/{attendance,leave}-rule-sets`. They cover schedule/calendar revision catalogs and assignments, clock actions and correction history, annual entitlement/ledger, leave requests and whole cancellation. Owner, current reviewer and scoped-HR access is rechecked on reads, commands and replay. Module ownership, lock order and canonical evidence are described in [architecture.md](architecture.md#attendance-and-annual-leave).
+
 Mutations require `Idempotency-Key`. Command receipts, before/after audit details where applicable, and outbox records commit atomically with domain changes. Replay rechecks current authorization, and changed payloads conflict. Outbox records are durable pending events; persisting one does not mean an external provider has delivered a notification.
 
 Contact-profile self-service uses `/api/v1/employees/me/profile-proposals` and `/api/v1/profile-proposals/{id}`. Employees propose phone, email, address, or complete emergency-contact changes; active values change only after an assigned eligible HR reviewer approves. Returned proposals can be edited before resubmission; editing preserves `RETURNED`, and resubmission captures fresh routing context. Explicit null values and field removal are rejected. Touched-group counters detect intervening changes, including A→B→A; unrelated corrections survive approval. One open proposal per employee is enforced in PostgreSQL.
@@ -101,7 +105,7 @@ export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
 docker compose --profile provision run --rm postgres-runtime-provision
 ```
 
-The provisioning script grants foundation and contact-profile approval permissions, including append-only history and audit access. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
+The provisioning script grants common command, contact-profile, attendance and leave permissions, including append-only history and audit access. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
 
 ```sql
 GRANT SELECT, INSERT, UPDATE, DELETE ON
@@ -134,3 +138,28 @@ Replace the example issuer, audience, and JWKS URL with values matching your ver
 PostgreSQL tests require a separate `peoplecore_tests` database, defaulting to `jdbc:postgresql://localhost:54339/peoplecore_tests`, with `peoplecore_test` credentials. Override these with `PEOPLECORE_TEST_DB_URL`, `PEOPLECORE_TEST_DB_USERNAME`, and `PEOPLECORE_TEST_DB_PASSWORD`. The test administrator needs permission to create isolated schemas and temporary runtime roles; fixtures remove them afterward. Never point these tests at the application database.
 
 `check` requires ordinary and PostgreSQL execution data and enforces at least 85% line and branch coverage. Migrations reject invalid existing assignment intervals rather than rewriting history.
+
+### Work calendars and context
+
+HR publishes reusable immutable configuration with `POST /api/v1/attendance/schedule-revisions` and `/calendar-revisions` (Idempotency-Key required). Current HR operators may retrieve published catalogs with GET on those paths (`page=0&size=20`, maximum size 100), and full configuration with GET `/{id}`. Employee identities do not grant catalog access.
+
+Use `POST /api/v1/attendance/publish-preview` before assigning a revision. Assignment commands under `/api/v1/employees/{employeeId}/schedule-assignments` and `/calendar-assignments` require `expectedFingerprint`; stale context returns 409 and requires a new preview. Publish itself has no fingerprint because applicability changes only with assignments. Backdated assignments require a reason. `GET /api/v1/employees/{employeeId}/work-context?from=2026-10-01&to=2026-11-01` returns the half-open range, at most 366 days, without pinning evidence. Missing context appears as a per-date blockedReason. Owner reads require a current binding and effective role; HR reads require current target coverage.
+
+Apply migrations using owner credentials before rerunning `local/postgres/provision-runtime.sql` for runtime grants. V14 supplies context storage, V15 seals assignment provenance, and V16–V18 define attendance recording, entitlement and leave workflow storage. All application instances must participate in the shared `profile-admission` protocol to coordinate context and authority changes with reads and commands. See [architecture](architecture.md#attendance-and-annual-leave) for admission ordering and canonical evidence.
+
+Security artifacts include `*-all-severities.json`, the HIGH/CRITICAL gate report, and `*-review.json` with remediation ownership/decision status. Review lower-severity results even when the gate passes.
+
+### Local image security checks
+
+Local service Dockerfiles pin their base images and apply fixed minimum Alpine package versions. The Keycloak helper also pins Guava, MariaDB and OpenTelemetry API/context JARs by SHA256, runs Quarkus augmentation, and copies the patched distribution into a clean runtime stage. Bootstrap aliases resolve to the patched JARs.
+
+Build the backend and service images before scanning their dependencies:
+
+```bash
+./gradlew bootJar
+docker compose build
+python3 -m unittest discover -s local/security -p 'test_*.py'
+bash local/security/check.sh
+```
+
+The scanner defaults to `trivy`; set `TRIVY_BIN` to use another executable path and `SECURITY_REPORT_DIR` to change the report directory. `local/security/check.sh` produces backend/image SBOMs, verifies the SQS runtime JAR inventory, scans every severity, and confirms that a vulnerable fixture fails the HIGH/CRITICAL gate. The `Backend checks` workflow runs the Gradle checks, local service contract checks, and security scans, then uploads their reports.

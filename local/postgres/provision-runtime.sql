@@ -13,7 +13,21 @@ GRANT SELECT, INSERT ON profile_rule_activations TO peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE ON employee_contact_profile, profile_proposal, profile_assignment TO peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE ON profile_revision TO peoplecore_runtime;
 GRANT SELECT, INSERT ON profile_revision_change, profile_decision, profile_route_evaluation TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON work_schedule_revision, holiday_calendar_revision TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON attendance_account TO peoplecore_runtime;
+GRANT SELECT, INSERT ON work_schedule_day, holiday_date, attendance_occurrence TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON employee_schedule_assignment, employee_calendar_assignment TO peoplecore_runtime;
 REVOKE ALL ON audit_events FROM peoplecore_runtime;
+GRANT SELECT, INSERT ON clock_event, attendance_effective_revision, attendance_correction_revision,
+    attendance_correction_assignment, attendance_correction_decision, attendance_rule, attendance_rule_activation TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON attendance_correction, attendance_rule_set TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON leave_account, leave_period, leave_reservation TO peoplecore_runtime;
+GRANT SELECT ON leave_policy_revision TO peoplecore_runtime;
+GRANT SELECT, INSERT ON leave_ledger, leave_rule_set, leave_rule, leave_rule_activation, leave_revision,
+    leave_portion, leave_decision, leave_recovery, leave_cancellation_decision, leave_history, leave_route_evaluation TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON leave_rule_current, leave_request, leave_occupancy,
+    leave_review_assignment, leave_cancellation, leave_cancellation_assignment TO peoplecore_runtime;
+
 GRANT SELECT, INSERT ON audit_events TO peoplecore_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO peoplecore_runtime;
 COMMIT;
