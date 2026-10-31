@@ -50,6 +50,24 @@ public class AccountAccessService {
         this.clock = clock;
     }
 
+    @Transactional(readOnly = true)
+    public Optional<UserAccount> findAccountById(Long id) {
+        return accounts.findById(id);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<UserAccount> accountBoundToEmployee(UUID employeePublicId) {
+        return bindings.findByEmployeePublicIdAndRevokedAtIsNull(employeePublicId)
+            .flatMap(binding -> accounts.findById(binding.getAccountId()));
+    }
+
+    @Transactional(readOnly = true)
+    public boolean hasScopedRole(Long accountId, String role, String orgUnit, Instant at) {
+        return roles.findByAccountId(accountId).stream().anyMatch(grant -> role.equals(grant.getRole())
+            && grant.isEffectiveAt(at) && (!StringUtils.hasText(grant.getScope())
+                || grant.getScope().equals(orgUnit)));
+    }
+
     public record AccessSnapshot(
         UUID accountId,
         String status,
@@ -125,6 +143,29 @@ public class AccountAccessService {
     @Transactional(readOnly = true)
     public void requireTargetScope(Long accountId, String targetOrgUnit, Instant now) {
         if (!coversUnit(accountId, targetOrgUnit, now)) {
+            throw new ResourceNotFoundException();
+        }
+    }
+
+    /**
+     * Shared employee-read decision so the employee and work-context endpoints
+     * cannot diverge. A caller may read an employee it covers, or its own bound
+     * employee while holding a currently effective role; every other target is
+     * reported as an absent resource so inaccessible and unknown identifiers are
+     * indistinguishable.
+     */
+    @Transactional(readOnly = true)
+    public void requireEmployeeRead(UserAccount account, UUID employeePublicId, String targetOrgUnit, Instant now) {
+        Objects.requireNonNull(account, "account must not be null");
+        Objects.requireNonNull(now, "now must not be null");
+        if (coversUnit(account.getId(), targetOrgUnit, now)) {
+            return;
+        }
+        if (activeRoles(account.getId(), now).isEmpty()) {
+            throw new ResourceNotFoundException();
+        }
+        UUID own = ownEmployeePublicId(account).orElse(null);
+        if (employeePublicId == null || !employeePublicId.equals(own)) {
             throw new ResourceNotFoundException();
         }
     }

@@ -59,7 +59,7 @@ jobs:
         env:
           TRIVY_BIN: /tmp/peoplecore-scanner/trivy
         run: |
-          python3 -m unittest local/security/test_sqs_inventory.py
+          python3 -m unittest discover -s local/security -p 'test_*.py'
           bash local/security/check.sh
       - uses: actions/upload-artifact@v4
         if: always()

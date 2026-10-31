@@ -117,6 +117,28 @@ class HrisAccessPolicyTest {
     }
 
     @Test
+    void contextPublishCommandsRequireOrganizationWideAuthorityIncludingReplay() {
+        UserAccount hr = activeHrAccount();
+        when(accounts.findByOidcIssuerAndOidcSubject(ISSUER, "hr-1")).thenReturn(Optional.of(hr));
+        RoleAssignment scoped =
+            new RoleAssignment(hr.getId(), HrisRole.HR_ADMIN, "ENG", NOW.minusSeconds(10), NOW);
+        when(roles.findByAccountId(hr.getId())).thenReturn(List.of(scoped));
+        for (String type : List.of("SCHEDULE_PUBLISH", "CALENDAR_PUBLISH")) {
+            assertThrows(AccessDeniedException.class,
+                () -> policy.checkCommand(caller("hr-1"), command("hr-1", type)));
+            assertThrows(AccessDeniedException.class,
+                () -> policy.checkReplay(caller("hr-1"), command("hr-1", type), "{}"));
+        }
+        RoleAssignment orgWide =
+            new RoleAssignment(hr.getId(), HrisRole.HR_ADMIN, null, NOW.minusSeconds(10), NOW);
+        when(roles.findByAccountId(hr.getId())).thenReturn(List.of(orgWide));
+        for (String type : List.of("SCHEDULE_PUBLISH", "CALENDAR_PUBLISH")) {
+            policy.checkCommand(caller("hr-1"), command("hr-1", type));
+            policy.checkReplay(caller("hr-1"), command("hr-1", type), "{}");
+        }
+    }
+
+    @Test
     void privilegedRestoreReplayRequiresCurrentAuthorityAndRecordedScope() {
         UserAccount hr = activeHrAccount();
         when(accounts.findByOidcIssuerAndOidcSubject(ISSUER, "hr-1")).thenReturn(Optional.of(hr));

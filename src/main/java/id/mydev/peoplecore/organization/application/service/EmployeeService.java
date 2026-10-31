@@ -136,16 +136,7 @@ public class EmployeeService {
     }
 
     private void requireReadScope(Employee employee, UserAccount account, String orgUnit, Instant now) {
-        if (access.coversUnit(account.getId(), orgUnit, now)) {
-            return;
-        }
-        if (access.activeRoles(account.getId(), now).isEmpty()) {
-            throw new ResourceNotFoundException();
-        }
-        UUID own = access.ownEmployeePublicId(account).orElse(null);
-        if (!employee.getPublicId().equals(own)) {
-            throw new ResourceNotFoundException();
-        }
+        access.requireEmployeeRead(account, employee.getPublicId(), orgUnit, now);
     }
 
     @Transactional
@@ -303,6 +294,16 @@ public class EmployeeService {
             }
         }
         return Optional.ofNullable(current);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<UUID> currentManagerPublicId(Long employeeId, Instant at) {
+        Objects.requireNonNull(at, "at must not be null");
+        return assignments.findByEmployeeIdAndSupersededAtIsNullOrderByValidFromAsc(employeeId).stream()
+            .filter(a -> !a.getValidFrom().isAfter(at) && (a.getValidTo() == null || at.isBefore(a.getValidTo())))
+            .max(java.util.Comparator.comparing(EmployeeAssignment::getValidFrom))
+            .map(EmployeeAssignment::getManagerEmployeeId).flatMap(employees::findById)
+            .map(Employee::getPublicId);
     }
 
     public record OrganizationContext(UUID assignmentPublicId, UUID predecessorPublicId,

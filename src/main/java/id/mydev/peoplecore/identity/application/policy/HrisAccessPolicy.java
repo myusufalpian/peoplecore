@@ -61,6 +61,53 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
     private static final Set<String> RULE_COMMANDS = Set.of(
         "PROFILE_RULE_PUBLISH",
         "PROFILE_RULE_ACTIVATE");
+    private static final Set<String> CONTEXT_PUBLISH_COMMANDS = Set.of(
+        "SCHEDULE_PUBLISH",
+        "CALENDAR_PUBLISH");
+    private static final Set<String> CONTEXT_ASSIGN_COMMANDS = Set.of(
+        "SCHEDULE_ASSIGN",
+        "CALENDAR_ASSIGN");
+
+    private static final Set<String> ATTENDANCE_COMMANDS = Set.of(
+        "ATTENDANCE_CLOCK",
+        "ATTENDANCE_CORRECTION_CREATE",
+        "ATTENDANCE_CORRECTION_EDIT",
+        "ATTENDANCE_CORRECTION_DISCARD",
+        "ATTENDANCE_CORRECTION_SUBMIT",
+        "ATTENDANCE_CORRECTION_RESUBMIT",
+        "ATTENDANCE_CORRECTION_WITHDRAW",
+        "ATTENDANCE_CORRECTION_APPROVE",
+        "ATTENDANCE_CORRECTION_REJECT",
+        "ATTENDANCE_CORRECTION_RETURN",
+        "ATTENDANCE_CORRECTION_REASSIGN",
+        "ATTENDANCE_CORRECTION_ROUTE_RETRY",
+        "ATTENDANCE_RULE_PUBLISH",
+        "ATTENDANCE_RULE_ACTIVATE");
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.attendance.application.command.AttendanceCommands> attendanceCommands;
+
+    private static final Set<String> LEAVE_WORKFLOW_COMMANDS = Set.of(
+        "LEAVE_REQUEST_CREATE",
+        "LEAVE_REQUEST_EDIT",
+        "LEAVE_REQUEST_DISCARD",
+        "LEAVE_REQUEST_SUBMIT",
+        "LEAVE_REQUEST_RESUBMIT",
+        "LEAVE_REQUEST_WITHDRAW",
+        "LEAVE_REQUEST_APPROVE",
+        "LEAVE_REQUEST_REJECT",
+        "LEAVE_REQUEST_RETURN",
+        "LEAVE_REQUEST_REASSIGN",
+        "LEAVE_REQUEST_RETRY_ROUTE",
+        "LEAVE_CANCELLATION_CREATE",
+        "LEAVE_CANCELLATION_WITHDRAW",
+        "LEAVE_CANCELLATION_APPROVE",
+        "LEAVE_CANCELLATION_REJECT",
+        "LEAVE_CANCELLATION_REASSIGN",
+        "LEAVE_CANCELLATION_RETRY_ROUTE",
+        "LEAVE_RULE_PUBLISH",
+        "LEAVE_RULE_ACTIVATE");
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.leave.application.service.LeaveWorkflowService> leaveWorkflows;
 
     private final AccountAccessService access;
     private final EmployeeService employees;
@@ -88,6 +135,18 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
             return;
         }
         Instant now = Instant.now(clock);
+        if (ATTENDANCE_COMMANDS.contains(command.commandType())) {
+            attendanceCommands.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (LEAVE_WORKFLOW_COMMANDS.contains(command.commandType())) {
+            leaveWorkflows.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if ("LEAVE_OPENING".equals(command.commandType()) || "LEAVE_ADJUSTMENT".equals(command.commandType())) {
+            requireEntitlementScope(caller, mapper.readTree(command.requestPayload()), now);
+            return;
+        }
         if (PROFILE_OWNER_COMMANDS.contains(command.commandType())) {
             requireBoundEmployee(caller, now);
             return;
@@ -104,6 +163,17 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
             access.requireHrOperation(caller, now);
             return;
         }
+        if (CONTEXT_PUBLISH_COMMANDS.contains(command.commandType())) {
+            requireOrganizationWideHr(caller, now);
+            return;
+        }
+        if (CONTEXT_ASSIGN_COMMANDS.contains(command.commandType())) {
+            UserAccount account = access.requireActive(caller, now);
+            if (!access.hasRole(account.getId(), HrisRole.HR_ADMIN, now)) {
+                throw new AccessDeniedException("Role " + HrisRole.HR_ADMIN + " is required");
+            }
+            return;
+        }
         if (!HR_COMMANDS.contains(command.commandType())) {
             throw new AccessDeniedException("Command is not permitted for this caller");
         }
@@ -114,6 +184,12 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         if (IDENTITY_COMMANDS.contains(command.commandType())) {
             access.requireIdentityAuthority(account.getId(), now);
         }
+    }
+
+    private void requireEntitlementScope(Authentication caller, JsonNode payload, Instant now) {
+        UUID employeeId = requiredId(payload, "employeePublicId");
+        var employee = employees.requireInternalByPublicId(employeeId);
+        access.requireHrScope(caller, employees.currentOrgUnit(employee.getId(), now).orElse(null), now);
     }
 
     private void requireBoundEmployee(Authentication caller, Instant now) {
@@ -129,6 +205,19 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
     @Override
     public void checkReplay(Authentication caller, CommandContext command, String recordedResult) {
         checkCommand(caller, command);
+        if (ATTENDANCE_COMMANDS.contains(command.commandType())) {
+            attendanceCommands.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()), recordedResult, caller);
+            return;
+        }
+        if (LEAVE_WORKFLOW_COMMANDS.contains(command.commandType())) {
+            leaveWorkflows.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()),
+                recordedResult(recordedResult), caller);
+            return;
+        }
+        if ("LEAVE_OPENING".equals(command.commandType()) || "LEAVE_ADJUSTMENT".equals(command.commandType())) {
+            requireEntitlementScope(caller, mapper.readTree(command.requestPayload()), Instant.now(clock));
+            return;
+        }
         if (COMMAND_ACTIVATE.equals(command.commandType())) {
             checkActivationReplay(caller, recordedResult);
             return;
@@ -168,6 +257,26 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
                 approvalRules.verifyActivateReplayScope(recordedRuleSet(recordedResult), caller);
             } else {
                 approvalRules.verifyPublishReplayScope(recordedRuleSet(recordedResult), caller);
+            }
+            return;
+        }
+        if (CONTEXT_PUBLISH_COMMANDS.contains(command.commandType())) {
+            requireOrganizationWideHr(caller, Instant.now(clock));
+            return;
+        }
+        if (CONTEXT_ASSIGN_COMMANDS.contains(command.commandType())) {
+            JsonNode assigned = recordedResult(recordedResult);
+            UUID assignedEmployee = requiredId(assigned, "employeePublicId");
+            Instant assignedNow = Instant.now(clock);
+            UserAccount assignedCaller = access.requireActive(caller, assignedNow);
+            String assignedUnit = employees.findByPublicId(assignedEmployee)
+                .flatMap(employee -> employees.currentOrgUnit(employee.getId(), assignedNow))
+                .orElse(null);
+            if (!access.coversUnit(assignedCaller.getId(), assignedUnit, assignedNow)) {
+                throw new AccessDeniedException("Recorded scope is no longer authorized");
+            }
+            if (!access.hasRole(assignedCaller.getId(), HrisRole.HR_ADMIN, assignedNow)) {
+                throw new AccessDeniedException("Role " + HrisRole.HR_ADMIN + " is required");
             }
             return;
         }
@@ -217,6 +326,13 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         }
         if (!access.hasRole(account.getId(), HrisRole.HR_ADMIN, now)) {
             throw new AccessDeniedException("Role " + HrisRole.HR_ADMIN + " is required");
+        }
+    }
+
+    private void requireOrganizationWideHr(Authentication caller, Instant now) {
+        UserAccount account = access.requireHrOperation(caller, now);
+        if (!access.hrAuthority(account.getId(), now).organizationWide()) {
+            throw new AccessDeniedException("Organization-wide HR authority is required");
         }
     }
 

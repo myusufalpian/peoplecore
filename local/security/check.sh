@@ -7,10 +7,16 @@ mkdir -p "$report_dir"
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert any("pkg:maven/" in c.get("purl", "") for c in s.get("components", [])), "Backend SBOM is missing Java dependencies"' "$report_dir/backend.cdx.json"
 python3 local/security/prove-gate.py "$trivy_bin" "$report_dir"
 scan_failed=0
-if ! "$trivy_bin" sbom --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format json \
-  --output "$report_dir/backend-vulnerabilities.json" "$report_dir/backend.cdx.json"; then
-  scan_failed=1
-fi
+scan_sbom() {
+  local sbom="$1" stem="$2" owner="$3"
+  "$trivy_bin" sbom --scanners vuln --format json \
+    --output "$report_dir/$stem-all-severities.json" "$sbom"
+  if ! python3 local/security/review_findings.py "$report_dir/$stem-all-severities.json" \
+      "$report_dir/$stem-vulnerabilities.json" "$report_dir/$stem-review.json" "$owner"; then
+    scan_failed=1
+  fi
+}
+scan_sbom "$report_dir/backend.cdx.json" backend backend-maintainer
 images=$(docker compose config --images | sort -u)
 test -n "$images"
 sqs_image=$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["sqs"]["image"])')
@@ -26,15 +32,9 @@ while IFS= read -r image; do
       python3 local/security/validate_sqs_inventory.py "$runtime_dir"
       cp "$runtime_dir/sbom.cdx.json" "$report_dir/sqs-dependencies.cdx.json"
     )
-    if ! "$trivy_bin" sbom --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format json \
-        --output "$report_dir/sqs-dependency-vulnerabilities.json" "$report_dir/sqs-dependencies.cdx.json"; then
-      scan_failed=1
-    fi
+    scan_sbom "$report_dir/sqs-dependencies.cdx.json" sqs-dependency backend-maintainer
   fi
   "$trivy_bin" image --scanners vuln --format cyclonedx --output "$report_dir/$report_name.cdx.json" "$image"
-  if ! "$trivy_bin" sbom --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format json \
-      --output "$report_dir/$report_name-vulnerabilities.json" "$report_dir/$report_name.cdx.json"; then
-    scan_failed=1
-  fi
+  scan_sbom "$report_dir/$report_name.cdx.json" "$report_name" platform-maintainer
 done <<< "$images"
 exit "$scan_failed"
