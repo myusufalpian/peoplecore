@@ -175,7 +175,7 @@ class ProfileApprovalRulesPostgresTest {
                 .schemas(fixture.schema).target("9").load().migrate();
             fixture.jdbc.update(
                 "insert into employees(public_id,employee_number,created_at) values(gen_random_uuid(),'PRE-RULES',now())");
-            assertEquals(9, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(11, fixture.flyway().migrate().migrationsExecuted);
             assertEquals(1, fixture.jdbc.queryForObject(
                 "select count(*) from employees where employee_number='PRE-RULES'", Integer.class));
 

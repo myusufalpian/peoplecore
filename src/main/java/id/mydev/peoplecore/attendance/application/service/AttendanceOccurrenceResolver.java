@@ -100,7 +100,7 @@ public class AttendanceOccurrenceResolver {
         return firstStart.isBefore(secondEnd) && secondStart.isBefore(firstEnd);
     }
 
-    @Transactional(propagation = Propagation.MANDATORY)
+    @Transactional(propagation = Propagation.MANDATORY, noRollbackFor = WorkContextException.class)
     public AttendanceOccurrence resolveOrPin(Long employeeId, LocalDate workDate) {
         Objects.requireNonNull(employeeId, "employeeId must not be null");
         Objects.requireNonNull(workDate, "workDate must not be null");
@@ -127,7 +127,7 @@ public class AttendanceOccurrenceResolver {
         return occurrences.findByEmployeeIdAndWorkDate(employeeId, workDate);
     }
 
-    @Transactional(propagation = Propagation.MANDATORY)
+    @Transactional(propagation = Propagation.MANDATORY, noRollbackFor = WorkContextException.class)
     public EffectiveOccurrence computeEffective(Long employeeId, LocalDate workDate) {
         Objects.requireNonNull(employeeId, "employeeId must not be null");
         Objects.requireNonNull(workDate, "workDate must not be null");

@@ -213,10 +213,9 @@ class LeaveWorkflowPostgresTest {
         assertEquals("NO_DESIGNATED_REVIEWER",routing.resolveWithManager(employee,"ENG",UUID.randomUUID(),now).blockedReason());
         assertEquals("REVIEWER_INELIGIBLE",routing.resolveWithManager(employee, "ENG",employee,now).blockedReason());
 
-        Long configuration=jdbc.queryForObject("SELECT rule_set_id FROM leave_rule_current WHERE id=1",Long.class);
-        jdbc.update("INSERT INTO leave_rule(rule_set_id,rule_id,priority,org_unit,hr_account_public_id,cancellation_account_public_id) "
-            + "SELECT rule_set_id,'duplicate-eng',priority,org_unit,hr_account_public_id,cancellation_account_public_id "
-            + "FROM leave_rule WHERE rule_set_id=? AND rule_id='eng'",configuration);
+        var ambiguous=commands.publish(hr,key(),new Publish(List.of(
+            new Rule("eng-a",1,"ENG",hrId,hrId),new Rule("eng-b",1,"ENG",hrId,hrId))));
+        commands.activate(hr,key(),ambiguous.publicId());
         assertEquals("AMBIGUOUS_RULE",routing.resolveWithManager(employee,"ENG",managerEmployee,now).blockedReason());
 
         assertTrue(routing.eligible(hrId,employee,"ENG",2,false,now));
@@ -484,6 +483,38 @@ class LeaveWorkflowPostgresTest {
         authenticate(hr); commands.actCancellation(hr,key(),id,cancellationId,"APPROVE",action(cancellation.version(),null));
         assertEquals("CANCELLED",workflow.get(id,owner).status()); assertEquals(0,balance().consumed());
         assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_occupancy SET active=TRUE WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",id));
+    }
+    @Test void routingRejectsIneligibleCancellationReviewer() {
+        UUID config=UUID.randomUUID();
+        jdbc.update("INSERT INTO leave_rule_set(public_id,created_at) VALUES (?,now())",config);
+        Long internal=jdbc.queryForObject("SELECT id FROM leave_rule_set WHERE public_id=?",Long.class,config);
+        jdbc.update("INSERT INTO leave_rule(rule_set_id,rule_id,priority,org_unit,hr_account_public_id,cancellation_account_public_id) "
+            + "VALUES (?,?,?,?,?,?)",internal,"bad-cancel",1,"ENG",hrId,UUID.randomUUID());
+        jdbc.update("INSERT INTO leave_rule_activation(rule_set_id,activated_at) VALUES (?,now())",internal);
+        jdbc.update("INSERT INTO leave_rule_current(id,rule_set_id) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET rule_set_id=EXCLUDED.rule_set_id",internal);
+        assertEquals("REVIEWER_INELIGIBLE",
+            routing.resolveWithManager(employee,"ENG",managerEmployee,Instant.now()).blockedReason());
+    }
+    @Test void runtimeCannotInsertIntoActivatedLeaveConfiguration() {
+        Long config=jdbc.queryForObject("SELECT rule_set_id FROM leave_rule_current WHERE id=1",Long.class);
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "INSERT INTO leave_rule(rule_set_id,rule_id,priority,org_unit,hr_account_public_id,cancellation_account_public_id) VALUES (?,?,?,?,?,?)",
+            config,"late-rule",5,"ENG",hrId,hrId));
+    }
+    @Test void runtimeCannotInsertSubmittedLeaveEvidenceOrReactivateReservation() {
+        RequestView request=submit(Portion.FULL,date);
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "INSERT INTO leave_portion(request_id,revision,employee_id,occurrence_id,work_date,half,start_at,end_at) "
+                + "SELECT request_id,revision,employee_id,occurrence_id,work_date+1,half,start_at,end_at FROM leave_portion "
+                + "WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?) LIMIT 1",request.publicId()));
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "INSERT INTO leave_decision(request_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,outcome,created_at) "
+                + "SELECT id,revision,3,?,?,'APPROVE',now() FROM leave_request WHERE public_id=?",hrId,managerEmployee,request.publicId()));
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "UPDATE leave_reservation SET half_units=half_units+1 WHERE request_public_id=?",request.publicId()));
+        jdbc.update("UPDATE leave_reservation SET active=FALSE WHERE request_public_id=?",request.publicId());
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "UPDATE leave_reservation SET active=TRUE WHERE request_public_id=?",request.publicId()));
     }
     private void pin(LocalDate day,Instant start,Instant end) {
         jdbc.update("INSERT INTO attendance_occurrence(public_id,employee_id,work_date,start_at,end_at,timezone,schedule_revision_id,calendar_revision_id,schedule_assignment_id,calendar_assignment_id,created_at) SELECT ?,s.employee_id,?,?,?,'Asia/Jakarta',s.revision_id,c.revision_id,s.id,c.id,? FROM employee_schedule_assignment s JOIN employee_calendar_assignment c ON c.employee_id=s.employee_id WHERE s.employee_id=? AND NOT s.superseded AND NOT c.superseded",

@@ -97,6 +97,7 @@ public class LeaveRoutingService {
         Route route=new Route(config,managerId,rule.hrAccountPublicId(),rule.cancellationAccountPublicId(),null);
         if(!eligible(managerId,employeePublicId,unit,1,false,now)
             || !eligible(rule.hrAccountPublicId(),employeePublicId,unit,2,false,now)
+            || !eligible(rule.cancellationAccountPublicId(),employeePublicId,unit,2,false,now)
             || samePerson(managerId,rule.hrAccountPublicId())) {
             return new Route(config,managerId,rule.hrAccountPublicId(),rule.cancellationAccountPublicId(),"REVIEWER_INELIGIBLE");
         }

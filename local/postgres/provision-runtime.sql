@@ -7,6 +7,8 @@ ALTER ROLE peoplecore_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
 SELECT format('ALTER ROLE peoplecore_runtime PASSWORD %L', :'runtime_password') \gexec
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO peoplecore_runtime;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM peoplecore_runtime;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON command_receipts, outbox_events, user_accounts, employees TO peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE ON profile_rule_sets, profile_rules, profile_rule_current_activation TO peoplecore_runtime;
 GRANT SELECT, INSERT ON profile_rule_activations TO peoplecore_runtime;

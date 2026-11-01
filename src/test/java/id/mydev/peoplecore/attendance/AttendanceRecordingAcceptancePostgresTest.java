@@ -104,6 +104,8 @@ class AttendanceRecordingAcceptancePostgresTest {
     private UUID employee;
     private UUID managerEmployee;
     private UUID hrPublicId;
+    private UUID scheduleRevision;
+    private UUID calendarRevision;
     private RoleAssignment memberRole;
 
     @BeforeEach
@@ -129,10 +131,10 @@ class AttendanceRecordingAcceptancePostgresTest {
         employees.addAssignment(employee,UUID.randomUUID(),"ENG",managerEmployee,"STAFF",earlier,null,hr);
         List<ScheduleDayPayload> days=new ArrayList<>();
         for(int day=1;day<=7;day++) days.add(new ScheduleDayPayload(day,LocalTime.of(9,0),LocalTime.of(17,0),0));
-        UUID schedule=calendars.publishSchedule(new PublishSchedulePayload(UUID.randomUUID(),"Asia/Jakarta",days),hr).publicId();
-        UUID calendar=calendars.publishCalendar(new PublishCalendarPayload(UUID.randomUUID(),"JKT",List.of()),hr).publicId();
-        assign(schedule,true);
-        assign(calendar,false);
+        scheduleRevision=calendars.publishSchedule(new PublishSchedulePayload(UUID.randomUUID(),"Asia/Jakarta",days),hr).publicId();
+        calendarRevision=calendars.publishCalendar(new PublishCalendarPayload(UUID.randomUUID(),"JKT",List.of()),hr).publicId();
+        assign(scheduleRevision,true);
+        assign(calendarRevision,false);
         as(hr);
         UUID rules=commands.publish(hr,key(),new PublishRules(null,List.of(new Rule(UUID.randomUUID(),1,"ENG",null)))).publicId();
         commands.activate(hr,key(),new ActivateRules(rules,"Activate review rules"));
@@ -149,11 +151,36 @@ class AttendanceRecordingAcceptancePostgresTest {
         return id;
     }
     private void assign(UUID revision,boolean schedule) {
-        LocalDate from=DATE.minusDays(20);
+        assignFor(employee,revision,schedule,DATE.minusDays(20),null);
+    }
+    private void assignFor(UUID employeeId,UUID revision,boolean schedule,LocalDate from,LocalDate to) {
+        LocalDate previewEnd=to==null?from.plusDays(366):to;
         String fingerprint=calendars.previewImpact(new PreviewPayload(schedule?revision:null,schedule?null:revision,
-            from,from.plusDays(366),List.of(employee),null,null),hr).fingerprint();
-        var payload=new AssignmentPayload(UUID.randomUUID(),employee,revision,from,null,null,"Initial context",fingerprint);
+            from,previewEnd,List.of(employeeId),null,null),hr).fingerprint();
+        var payload=new AssignmentPayload(UUID.randomUUID(),employeeId,revision,from,to,null,"Initial context",fingerprint);
         if(schedule) calendars.assignSchedule(payload,hr); else calendars.assignCalendar(payload,hr);
+    }
+    private Authentication employeeWithoutContext(String prefix) {
+        Instant earlier=START.minusSeconds(86400*30L);
+        UserAccount account=account(prefix);
+        roles.saveAndFlush(new RoleAssignment(account.getId(),HrisRole.EMPLOYEE,null,earlier,earlier));
+        UUID newEmployee=employee(account);
+        employees.updateEmploymentDates(newEmployee,DATE.minusDays(1),null,hr);
+        as(hr);
+        employees.addAssignment(newEmployee,UUID.randomUUID(),"ENG",managerEmployee,"STAFF",START,null,hr);
+        return JwtAuthFixture.named(ISSUER,account.getOidcSubject());
+    }
+    private Authentication employeeWithContext(String prefix,LocalDate from,LocalDate to) {
+        Instant earlier=START.minusSeconds(86400*30L);
+        UserAccount account=account(prefix);
+        roles.saveAndFlush(new RoleAssignment(account.getId(),HrisRole.EMPLOYEE,null,earlier,earlier));
+        UUID newEmployee=employee(account);
+        employees.updateEmploymentDates(newEmployee,from,to,hr);
+        as(hr);
+        employees.addAssignment(newEmployee,UUID.randomUUID(),"ENG",managerEmployee,"STAFF",START,null,hr);
+        assignFor(newEmployee,scheduleRevision,true,from,to);
+        assignFor(newEmployee,calendarRevision,false,from,to);
+        return JwtAuthFixture.named(ISSUER,account.getOidcSubject());
     }
     private static String key() { return UUID.randomUUID().toString(); }
     private static void as(Authentication caller) { SecurityContextHolder.getContext().setAuthentication(caller); }
@@ -184,6 +211,28 @@ class AttendanceRecordingAcceptancePostgresTest {
         assertTrue(commands.clock(member,key(),new ClockPayload(Action.OUT),clock.instant()).duplicate());
         clock.at(START.plusSeconds(8*3600+61));
         assertThrows(WorkContextException.class,()->commands.clock(member,key(),new ClockPayload(Action.OUT),clock.instant()));
+    }
+
+    @Test
+    void clockCandidatesIgnoreAdjacentDatesWithoutContext() {
+        Authentication starter=employeeWithContext("starter",DATE,null);
+        Authentication finisher=employeeWithContext("finisher",DATE.minusDays(20),DATE.plusDays(1));
+        as(starter);
+        assertEquals("IN",commands.clock(starter,key(),new ClockPayload(Action.IN),clock.instant()).action());
+        as(finisher);
+        commands.clock(finisher,key(),new ClockPayload(Action.IN),clock.instant());
+        clock.at(START.plusSeconds(8*3600));
+        as(finisher);
+        assertEquals("OUT",commands.clock(finisher,key(),new ClockPayload(Action.OUT),clock.instant()).action());
+    }
+
+    @Test
+    void clockWithoutAnyContextFailsClosed() {
+        Authentication unconfigured=employeeWithoutContext("unconfigured");
+        as(unconfigured);
+        var error=assertThrows(WorkContextException.class,
+            ()->commands.clock(unconfigured,key(),new ClockPayload(Action.IN),clock.instant()));
+        assertEquals(WorkContextException.MISSING_SCHEDULE,error.getReason());
     }
 
     @Test
@@ -224,6 +273,21 @@ class AttendanceRecordingAcceptancePostgresTest {
     }
 
     @Test
+    void runtimeCannotRewriteCorrectionAggregateAfterSubmission() {
+        var draft=draft();
+        var pending=commands.act(member,key(),"SUBMIT",action(draft,null,null,null,null));
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "UPDATE attendance_correction SET proposed_in=proposed_in-INTERVAL '1 minute',version=version+1 WHERE public_id=?",
+            pending.publicId()));
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "UPDATE attendance_correction SET status='APPROVED',version=version+1 WHERE public_id=?",pending.publicId()));
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "UPDATE attendance_correction SET version=version+5 WHERE public_id=?",pending.publicId()));
+        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+            "DELETE FROM attendance_correction WHERE public_id=?",pending.publicId()));
+    }
+
+    @Test
     void correctionListAndHistoryAreBoundedAndScopedToOwnerReviewerOrHr() {
         var draft=draft();
         assertEquals(1,corrections.list(employee,DATE,DATE,null,0,10,member).rows().size());
@@ -239,6 +303,8 @@ class AttendanceRecordingAcceptancePostgresTest {
         assertThrows(IllegalArgumentException.class,()->corrections.history(draft.publicId(),"REVISIONS",null,101,member));
 
         var pending=commands.act(member,key(),"SUBMIT",action(draft,null,null,null,null));
+        assertThrows(ResourceNotFoundException.class,
+            ()->corrections.history(pending.publicId(),"REVISIONS",UUID.randomUUID(),10,member));
         assertEquals(1,corrections.history(pending.publicId(),"REVISIONS",null,10,member).rows().size());
         assertEquals(1,corrections.list(employee,DATE,DATE,"PENDING",0,10,manager).rows().size());
         assertEquals(1,corrections.history(pending.publicId(),"ASSIGNMENTS",null,10,manager).rows().size());

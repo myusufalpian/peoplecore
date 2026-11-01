@@ -14,6 +14,6 @@ public final class AttendanceRecordingDto {
     public record ClockRequest(@NotNull Action action) { }
     public record CreateCorrectionRequest(@NotNull LocalDate workDate,@NotNull Instant proposedIn,
         Instant proposedOut,@NotBlank @Size(max=2000) String reason) { }
-    public record CorrectionActionRequest(@PositiveOrZero long expectedVersion,UUID revisionId,
+    public record CorrectionActionRequest(@NotNull @PositiveOrZero Long expectedVersion,UUID revisionId,
         UUID expectedEvidenceId,UUID reviewerId,@Size(max=2000) String reason,Instant proposedIn,Instant proposedOut) { }
 }

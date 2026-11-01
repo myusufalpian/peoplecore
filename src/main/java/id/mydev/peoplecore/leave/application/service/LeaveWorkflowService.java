@@ -199,7 +199,7 @@ public class LeaveWorkflowService {
         int step=activeStep(request);
         Reviewer reviewer=reviewer(request,step);
         UserAccount actor=access.requireActive(caller,clock.instant());
-        requireReviewer(reviewer,actor,employee,revisionUnit(request),step);
+        requireReviewer(reviewer,actor,employee,step);
         if(!"APPROVE".equals(outcome)) requireReason(reason);
         if("APPROVE".equals(outcome) && step==2) {
             List<UUID> manager=jdbc.query("SELECT reviewer_employee_public_id FROM leave_decision WHERE request_id=? AND revision=? AND step=1 AND outcome='APPROVE'",(rs,n)->rs.getObject(1,UUID.class),request.id(),request.revision());
@@ -209,7 +209,7 @@ public class LeaveWorkflowService {
             if(expected!=occupied) throw new LeaveConflictException("RESERVATION_CHANGED");
             entitlement.consume(employee.getId(),request.from().getYear(),request.publicId(),request.revision());
         }
-        requireReviewer(reviewer,access.requireActive(caller,clock.instant()),employee,revisionUnit(request),step);
+        requireReviewer(reviewer,access.requireActive(caller,clock.instant()),employee,step);
         jdbc.update("INSERT INTO leave_decision(request_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,outcome,reason,created_at) VALUES (?,?,?,?,?,?,?,?)",
             request.id(),request.revision(),step,actor.getPublicId(),reviewer.employee(),outcome,reason,Timestamp.from(clock.instant()));
         if("APPROVE".equals(outcome)) {
@@ -296,14 +296,14 @@ public class LeaveWorkflowService {
         } else if("APPROVE".equals(action) || "REJECT".equals(action)) {
             Reviewer reviewer=cancellationReviewer(cancel);
             UserAccount actor=access.requireActive(caller,clock.instant());
-            requireReviewer(reviewer,actor,employee,currentUnit(employee),2);
+            requireReviewer(reviewer,actor,employee,2);
             if("REJECT".equals(action)) requireReason(payload.reason());
             if("APPROVE".equals(action)) {
                 entitlement.reverse(employee.getId(),request.from().getYear(),request.publicId(),request.revision());
                 jdbc.update("UPDATE leave_occupancy SET active=FALSE WHERE request_id=? AND revision=? AND active=TRUE",request.id(),request.revision());
                 transition(request,"CANCELLED");
             }
-            requireReviewer(reviewer,access.requireActive(caller,clock.instant()),employee,currentUnit(employee),2);
+            requireReviewer(reviewer,access.requireActive(caller,clock.instant()),employee,2);
             jdbc.update("INSERT INTO leave_cancellation_decision(cancellation_id,reviewer_account_public_id,outcome,reason,created_at) VALUES (?,?,?,?,?)",
                 cancel.id(),actor.getPublicId(),action,payload.reason(),Timestamp.from(clock.instant()));
             transitionCancellation(cancel,"APPROVE".equals(action)?"APPROVED":"REJECTED");
@@ -471,14 +471,14 @@ public class LeaveWorkflowService {
             Cancellation cancellation=cancellation(payloadUuid(payload,"cancellationPublicId"),false);
             if(!cancellation.requestId().equals(request.id())) throw new ResourceNotFoundException();
             selected=cancellationReviewer(cancellation); step=2;
-            requireReviewer(selected,access.requireActive(caller,clock.instant()),employee,currentUnit(employee),step);
+            requireReviewer(selected,access.requireActive(caller,clock.instant()),employee,step);
             return;
         }
         UserAccount account=access.requireActive(caller,clock.instant());
         for(int candidate=1;candidate<=2;candidate++) {
             Reviewer assigned=reviewer(request,candidate);
             if(Objects.equals(assigned.account(),account.getPublicId())) {
-                requireReviewer(assigned,account,employee,currentUnit(employee),candidate); return;
+                requireReviewer(assigned,account,employee,candidate); return;
             }
         }
         throw new ResourceNotFoundException();
@@ -499,12 +499,12 @@ public class LeaveWorkflowService {
         if(type.equals("LEAVE_CANCELLATION_APPROVE") || type.equals("LEAVE_CANCELLATION_REJECT")) {
             Cancellation cancellation=cancellation(payloadUuid(payload,"cancellationPublicId"),false);
             if(!cancellation.requestId().equals(request.id())) throw new ResourceNotFoundException();
-            requireReviewer(cancellationReviewer(cancellation),account,employee,currentUnit(employee),2); return;
+            requireReviewer(cancellationReviewer(cancellation),account,employee,2); return;
         }
         for(int step=1;step<=2;step++) {
             Reviewer selected=reviewer(request,step);
             if(Objects.equals(selected.account(),account.getPublicId())) {
-                requireReviewer(selected,account,employee,currentUnit(employee),step); return;
+                requireReviewer(selected,account,employee,step); return;
             }
         }
         throw new ResourceNotFoundException();
@@ -557,7 +557,7 @@ public class LeaveWorkflowService {
         }
         access.requireEmployeeRead(actor,employee.getPublicId(),currentUnit(employee),clock.instant());
     }
-    private void requireReviewer(Reviewer reviewer,UserAccount actor,Employee employee,String unit,int step) {
+    private void requireReviewer(Reviewer reviewer,UserAccount actor,Employee employee,int step) {
         if(reviewer.account()==null || !reviewer.account().equals(actor.getPublicId())
             || !Objects.equals(reviewer.employee(),access.ownEmployeePublicId(actor).orElse(null))
             || !routing.eligible(reviewer.account(),employee.getPublicId(),currentUnit(employee),step,reviewer.fallback(),clock.instant())) throw new AccessDeniedException("Current assigned eligible reviewer required");

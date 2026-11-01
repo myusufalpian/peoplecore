@@ -3,10 +3,12 @@ package id.mydev.peoplecore.leave.api.controller;
 import id.mydev.peoplecore.common.api.ApiData;
 import id.mydev.peoplecore.common.command.IdempotencyKeys;
 import id.mydev.peoplecore.common.security.CurrentCaller;
+import id.mydev.peoplecore.leave.api.dto.LeaveEntitlementDto.GrantRequest;
+import id.mydev.peoplecore.leave.api.mapper.LeaveEntitlementDtoMapper;
 import id.mydev.peoplecore.leave.application.command.LeaveEntitlementCommands;
 import id.mydev.peoplecore.leave.application.service.LeaveEntitlementService;
 import id.mydev.peoplecore.leave.application.service.LeaveEntitlementService.Balance;
-import id.mydev.peoplecore.leave.application.service.LeaveEntitlementService.GrantPayload;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,22 +26,25 @@ import id.mydev.peoplecore.leave.application.service.LeaveEntitlementService.Led
 public class LeaveEntitlementController {
     private final LeaveEntitlementCommands commands;
     private final LeaveEntitlementService service;
+    private final LeaveEntitlementDtoMapper mapper;
 
-    public LeaveEntitlementController(LeaveEntitlementCommands commands, LeaveEntitlementService service) {
+    public LeaveEntitlementController(LeaveEntitlementCommands commands, LeaveEntitlementService service,
+                                      LeaveEntitlementDtoMapper mapper) {
         this.commands = commands;
         this.service = service;
+        this.mapper = mapper;
     }
 
     @PostMapping("/opening")
-    public ApiData<Balance> opening(@RequestBody GrantPayload payload, @RequestHeader("Idempotency-Key") String key) {
+    public ApiData<Balance> opening(@Valid @RequestBody GrantRequest request, @RequestHeader("Idempotency-Key") String key) {
         IdempotencyKeys.requireValid(key);
-        return ApiData.of(commands.grant(CurrentCaller.require(),key,payload,true));
+        return ApiData.of(commands.grant(CurrentCaller.require(),key,mapper.toPayload(request),true));
     }
 
     @PostMapping("/adjustments")
-    public ApiData<Balance> adjustment(@RequestBody GrantPayload payload, @RequestHeader("Idempotency-Key") String key) {
+    public ApiData<Balance> adjustment(@Valid @RequestBody GrantRequest request, @RequestHeader("Idempotency-Key") String key) {
         IdempotencyKeys.requireValid(key);
-        return ApiData.of(commands.grant(CurrentCaller.require(),key,payload,false));
+        return ApiData.of(commands.grant(CurrentCaller.require(),key,mapper.toPayload(request),false));
     }
 
     @GetMapping("/ledger")

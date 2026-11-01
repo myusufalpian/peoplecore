@@ -39,6 +39,8 @@ The package layout follows the technical responsibility of each component. Busin
 
 Use Java records for immutable API and value data where appropriate, constructor or method injection for dependencies, and explicit validation at input boundaries. Keep persistence access behind repository or service classes and keep mapping logic out of controllers. Use `Instant` for timestamps and `BigDecimal` for exact decimal values.
 
+The `leave` and `attendance` recording controllers expose their application command-result records directly as read models; this is the recorded exception documented in [architecture](architecture.md#system-shape). Request bodies still use `api` DTOs/mappers where present, and other modules keep the `api` mapping convention.
+
 HTTP errors are mapped centrally through `GlobalExceptionHandler`; controllers should raise the relevant typed exception instead of constructing ad-hoc error JSON. Security decisions belong in the access-policy and identity services and the Spring Security configuration. Audit records are written through the audit writer and are append-only at the database layer.
 
 Tests mirror the production package structure. Unit tests cover deterministic domain and infrastructure behavior, HTTP tests verify status codes and response contracts, and PostgreSQL-tagged tests verify migrations and database constraints against a real PostgreSQL instance.
