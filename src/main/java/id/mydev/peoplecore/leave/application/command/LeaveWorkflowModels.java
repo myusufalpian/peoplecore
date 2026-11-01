@@ -19,7 +19,7 @@ public final class LeaveWorkflowModels {
                         @NotNull LocalDate toDate, @NotNull Portion portion,
                         @NotBlank @Size(max=2000) String reason) { }
     public enum Portion { FULL, FIRST_HALF, SECOND_HALF }
-    public record Action(@NotNull UUID employeePublicId, @Min(0) long expectedVersion,
+    public record Action(@NotNull UUID employeePublicId, @NotNull @Min(0) Long expectedVersion,
                          @Size(max=2000) String reason, UUID reviewerAccountPublicId,
                          @Min(1) @Max(2) Integer step, boolean fallback) { }
     public record Rule(@NotBlank @Size(max=128) String ruleId, int priority,

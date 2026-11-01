@@ -27,11 +27,14 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class AttendanceRecordingService {
     private static final ZoneId PILOT_ZONE = ZoneId.of("Asia/Jakarta");
+    private static final Set<String> MISSING_CONTEXT_REASONS = Set.of(
+        WorkContextException.MISSING_SCHEDULE, WorkContextException.MISSING_CALENDAR);
     private final AttendanceOccurrenceResolver resolver;
     private final AttendanceAccountGuard guard;
     private final AccountAccessService access;
@@ -120,6 +123,7 @@ public class AttendanceRecordingService {
 
     private List<LocalDate> candidates(Employee employee, LocalDate today, Instant at, Action action) {
         List<LocalDate> result = new ArrayList<>();
+        WorkContextException missingContext = null;
         for (int offset = -2; offset <= 1; offset++) {
             LocalDate date = today.plusDays(offset);
             try {
@@ -138,10 +142,20 @@ public class AttendanceRecordingService {
                     result.add(date);
                 }
             } catch (WorkContextException ex) {
-                if (!WorkContextException.NON_WORKING_DATE.equals(ex.getReason())) {
-                    throw ex;
+                if (WorkContextException.NON_WORKING_DATE.equals(ex.getReason())) {
+                    continue;
                 }
+                if (MISSING_CONTEXT_REASONS.contains(ex.getReason())) {
+                    if (missingContext == null) {
+                        missingContext = ex;
+                    }
+                    continue;
+                }
+                throw ex;
             }
+        }
+        if (result.isEmpty() && missingContext != null) {
+            throw missingContext;
         }
         return result;
     }

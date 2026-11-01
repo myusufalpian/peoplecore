@@ -275,16 +275,17 @@ public class AttendanceCorrectionService {
         }
         Long count=jdbc.queryForObject("SELECT count(id) FROM attendance_correction WHERE "+predicate,Long.class,args.toArray());
         args.add(size);args.add(Math.multiplyExact((long)page,size));
-        List<CorrectionResult> rows=jdbc.query("SELECT "+COLUMNS+" FROM attendance_correction WHERE "+predicate
-            + " ORDER BY created_at,public_id LIMIT ? OFFSET ?",this::map,args.toArray()).stream()
-            .map(correction->result(correction,employee,Instant.now(clock))).toList();
+        List<CorrectionResult> rows= jdbc.query("SELECT " + COLUMNS + " FROM attendance_correction WHERE " + predicate
+                + " ORDER BY created_at,public_id LIMIT ? OFFSET ?", this::map, args.toArray()).stream()
+            .filter(Objects::nonNull)
+            .map(correction->result(correction, employee, Instant.now(clock))).toList();
         Instant fresh=Instant.now(clock);
         UserAccount freshActor=access.requireActive(caller,fresh);
         if (owner || hr) access.requireEmployeeRead(freshActor,employeePublicId,
             employees.currentOrgUnit(employee.getId(),fresh).orElse(null),fresh);
         else if (!reviewers.eligible(freshActor,employee,fresh,false)
             && !reviewers.eligible(freshActor,employee,fresh,true)) throw new ResourceNotFoundException();
-        return new CorrectionPage(rows,page,size,count);
+        return new CorrectionPage(rows, page, size, count);
     }
 
     @Transactional
@@ -294,30 +295,46 @@ public class AttendanceCorrectionService {
         Correction correction=find(id);
         Employee employee=employees.requireInternalByPublicId(correction.employeePublicId());
         requireRead(correction,employee,caller,Instant.now(clock));
-        String sql;
-        if ("REVISIONS".equals(kind)) {
-            sql="SELECT public_id,proposed_in,proposed_out,reason,NULL AS decision,created_at FROM attendance_correction_revision "
-                + "WHERE correction_id=? AND id>COALESCE((SELECT id FROM attendance_correction_revision "
-                + "WHERE public_id=? AND correction_id=?),0) ORDER BY id LIMIT ?";
-        } else if ("DECISIONS".equals(kind)) {
-            sql="SELECT d.public_id,NULL AS proposed_in,NULL AS proposed_out,d.reason,d.decision,d.created_at "
-                + "FROM attendance_correction_decision d JOIN attendance_correction_revision r ON r.public_id=d.revision_id "
-                + "WHERE r.correction_id=? AND d.id>COALESCE((SELECT d2.id FROM attendance_correction_decision d2 "
-                + "JOIN attendance_correction_revision r2 ON r2.public_id=d2.revision_id WHERE d2.public_id=? "
-                + "AND r2.correction_id=?),0) ORDER BY d.id LIMIT ?";
-        } else if ("ASSIGNMENTS".equals(kind)) {
-            sql="SELECT a.public_id,NULL AS proposed_in,NULL AS proposed_out,a.reason,NULL AS decision,a.created_at "
-                + "FROM attendance_correction_assignment a JOIN attendance_correction_revision r ON r.public_id=a.revision_id "
-                + "WHERE r.correction_id=? AND a.id>COALESCE((SELECT a2.id FROM attendance_correction_assignment a2 "
-                + "JOIN attendance_correction_revision r2 ON r2.public_id=a2.revision_id WHERE a2.public_id=? "
-                + "AND r2.correction_id=?),0) ORDER BY a.id LIMIT ?";
-        } else throw new IllegalArgumentException("History kind must be REVISIONS, DECISIONS or ASSIGNMENTS");
-        List<CorrectionHistory> rows=jdbc.query(sql,(rs,row)->new CorrectionHistory(rs.getObject("public_id",UUID.class),
+        String sql = switch (kind) {
+          case "REVISIONS" ->
+              "SELECT public_id,proposed_in,proposed_out,reason,NULL AS decision,created_at FROM attendance_correction_revision "
+                  + "WHERE correction_id=? AND id>COALESCE((SELECT id FROM attendance_correction_revision "
+                  + "WHERE public_id=? AND correction_id=?),0) ORDER BY id LIMIT ?";
+          case "DECISIONS" ->
+              "SELECT d.public_id,NULL AS proposed_in,NULL AS proposed_out,d.reason,d.decision,d.created_at "
+                  + "FROM attendance_correction_decision d JOIN attendance_correction_revision r ON r.public_id=d.revision_id "
+                  + "WHERE r.correction_id=? AND d.id>COALESCE((SELECT d2.id FROM attendance_correction_decision d2 "
+                  + "JOIN attendance_correction_revision r2 ON r2.public_id=d2.revision_id WHERE d2.public_id=? "
+                  + "AND r2.correction_id=?),0) ORDER BY d.id LIMIT ?";
+          case "ASSIGNMENTS" ->
+              "SELECT a.public_id,NULL AS proposed_in,NULL AS proposed_out,a.reason,NULL AS decision,a.created_at "
+                  + "FROM attendance_correction_assignment a JOIN attendance_correction_revision r ON r.public_id=a.revision_id "
+                  + "WHERE r.correction_id=? AND a.id>COALESCE((SELECT a2.id FROM attendance_correction_assignment a2 "
+                  + "JOIN attendance_correction_revision r2 ON r2.public_id=a2.revision_id WHERE a2.public_id=? "
+                  + "AND r2.correction_id=?),0) ORDER BY a.id LIMIT ?";
+          case null, default ->
+              throw new IllegalArgumentException("History kind must be REVISIONS, DECISIONS or ASSIGNMENTS");
+        };
+        if (after!=null) requireHistoryCursor(kind,correction.id(),after);
+        List<CorrectionHistory> rows=jdbc.query(sql,(rs,row)-> new CorrectionHistory(rs.getObject("public_id",UUID.class),
             kind,instant(rs,"proposed_in"),instant(rs,"proposed_out"),rs.getString("reason"),rs.getString("decision"),
             rs.getTimestamp("created_at").toInstant()),correction.id(),after,correction.id(),size+1);
         UUID next=rows.size()>size?rows.get(size-1).publicId():null;
         requireRead(correction,employee,caller,Instant.now(clock));
         return new HistoryPage(rows.stream().limit(size).toList(),next);
+    }
+
+    private void requireHistoryCursor(String kind,Long correctionId,UUID cursor) {
+        String sql=switch(kind) {
+            case "REVISIONS" -> "SELECT count(id) FROM attendance_correction_revision WHERE public_id=? AND correction_id=?";
+            case "DECISIONS" -> "SELECT count(d.id) FROM attendance_correction_decision d JOIN attendance_correction_revision r "
+                + "ON r.public_id=d.revision_id WHERE d.public_id=? AND r.correction_id=?";
+            case "ASSIGNMENTS" -> "SELECT count(a.id) FROM attendance_correction_assignment a JOIN attendance_correction_revision r "
+                + "ON r.public_id=a.revision_id WHERE a.public_id=? AND r.correction_id=?";
+            default -> throw new IllegalArgumentException("History kind must be REVISIONS, DECISIONS or ASSIGNMENTS");
+        };
+        Integer count=jdbc.queryForObject(sql,Integer.class,cursor,correctionId);
+        if (count==null || count==0) throw new ResourceNotFoundException();
     }
 
     private void requireRead(Correction correction,Employee employee,Authentication caller,Instant now) {
@@ -339,7 +356,8 @@ public class AttendanceCorrectionService {
     private void validateProposal(Employee employee,LocalDate date,Instant in,Instant out) {
         AttendanceRecordingService.requireEmployment(employee,date);
         var pinned=resolver.findPinned(employee.getId(),date);
-        Instant start; Instant end;
+        Instant start;
+        Instant end;
         if (pinned.isPresent()) {
             if (pinned.get().isHoliday()) throw new IllegalArgumentException("Holiday is not a work occurrence");
             start=pinned.get().getStartAt();end=pinned.get().getEndAt();
@@ -364,8 +382,9 @@ public class AttendanceCorrectionService {
                     && !reviewers.eligible(reviewer.get(),employee,now,true))) blocked="REVIEWER_INELIGIBLE";
                 UUID baseline=jdbc.queryForObject("SELECT baseline_id FROM attendance_correction_revision WHERE public_id=?",
                     UUID.class,correction.revisionId());
-                var pin=resolver.findPinned(employee.getId(),correction.workDate()).orElseThrow();
-                if (!Objects.equals(baseline,recording.currentEvidence(pin.getId()).map(EffectiveResult::publicId).orElse(null))) {
+                var pin=resolver.findPinned(employee.getId(),correction.workDate());
+                if (pin.isEmpty() || !Objects.equals(baseline,
+                    recording.currentEvidence(pin.get().getId()).map(EffectiveResult::publicId).orElse(null))) {
                     blocked="EVIDENCE_CHANGED";
                 }
             }
