@@ -15,6 +15,11 @@ Peoplecore implements employee records, effective-dated organization assignments
 - Bounded profile-rule publication, organization-wide global activation, and shared preview/submission evaluation with a designated HR reviewer.
 - Employee-owned proposals, separate active contact values, return/edit/resubmit, reasoned HR decisions/reassignment, and explicit blocked-route recovery.
 - Database-sealed content, touched-field conflict counters, scoped queues/history, current receipt authorization, and atomic approval/application.
+- Effective-dated work schedules and holiday calendars, preview-bound employee assignments, and canonical work occurrences with pinned evidence.
+- Self-only clock actions with inclusive server-time windows, one IN/OUT pair per occurrence, and corrections that keep sealed evidence and reviewer routing.
+- Annual leave openings and signed adjustments in integer half units, with reservation, exact consumption and single reversal.
+- Manager-then-designated-HR leave requests, blocked-route recovery, whole cancellation, and scoped balance, ledger and portion summaries.
+- Typed attendance and leave rule sets with separate publication and activation, plus advisory route preview.
 
 HTTP DTO mappers, application result mappers, and audit/outbox trail mappers keep representation logic separate from mutation services.
 
@@ -201,11 +206,60 @@ Rule publication uses `{"rules":[{"ruleId":"eng-contact","priority":10,"orgUnit"
 
 Operation or owner-binding denial is 403. Proposal reads and HR decision/reassignment/retry commands return 404 for missing or out-of-scope resources before disclosing state/version. Stale versions/assignments, one-open conflicts, inactive reviewers, and same-field conflicts return 409. A touched-group conflict requires return, owner confirmation and fresh resubmission; there is no force-approval path. SYSTEM_ADMIN, manager and Finance roles alone grant no profile review/disclosure authority.
 
+## Attendance API
+
+All paths below are under `/api/v1`. Mutations require a verified JWT and `Idempotency-Key`.
+
+| Method | Path | Request / purpose |
+| --- | --- | --- |
+| POST | `/attendance/schedule-revisions` | `timezone?`, `days` (`weekday` 1–7, `startTime`, `endTime`, `overnightOffset` 0–1); organization-wide HR publish, 201 |
+| POST | `/attendance/calendar-revisions` | `location`, `holidays` (`holidayDay`, `holidayName`); HR publish, 201 |
+| GET | `/attendance/schedule-revisions`, `/attendance/calendar-revisions` | Published catalog with `page`/`size` (maximum 100) |
+| GET | `/attendance/schedule-revisions/{id}`, `/attendance/calendar-revisions/{id}` | Published configuration detail |
+| POST | `/attendance/publish-preview` | `scheduleRevisionId`/`calendarRevisionId`, `fromDate`, `toDate`, `employeeIds` (maximum 500), `supersedesId?`, `fingerprint?`; returns affected employees/dates and a context fingerprint |
+| POST | `/employees/{employeeId}/schedule-assignments`, `/employees/{employeeId}/calendar-assignments` | `revisionId`, `fromDate`, `toDate?`, `supersedesId?`, `backdateReason?`, `expectedFingerprint`; 201 |
+| GET | `/employees/{employeeId}/work-context` | `from`, `to` (at most 366 days); half-open occurrence view that does not pin evidence |
+| POST | `/attendance/clock-actions` | `action` `IN` or `OUT`; server time only, self only |
+| POST | `/attendance/corrections` | `workDate`, `proposedIn`, `proposedOut?`, `reason`; owner draft |
+| GET | `/attendance/corrections`, `/attendance/corrections/{id}` | Scoped list/detail with status, version and `blockedReason` |
+| GET | `/attendance/corrections/{id}/history` | Bounded revision and decision history |
+| POST | `/attendance/corrections/{id}/{action}` | `expectedVersion`, `revisionId?`, `expectedEvidenceId?`, `reviewerId?`, `reason?`, `proposedIn?`, `proposedOut?`; actions `edit`, `discard`, `submit`, `resubmit`, `withdraw`, `approve`, `reject`, `return`, `reassign`, `retry-route` |
+| POST | `/approval/attendance-rule-sets` | `publicId?`, `rules` (`publicId`, `priority`, `orgUnit`, `designatedHrId?`); HR publish |
+| POST | `/approval/attendance-rule-sets/activate` | `ruleSetId`, `reason`; organization-wide HR |
+| GET | `/approval/attendance-rule-sets/route-preview` | `employeePublicId`; activated configuration, current reviewer account and blocked reason |
+
+IN actions are accepted from two hours before the scheduled start until two hours after it; OUT actions from the scheduled start until four hours after the scheduled end. Boundaries are inclusive. A repeated action inside the inclusive 60-second window is treated as the same action even with a different idempotency key or device, and an occurrence keeps one IN/OUT pair. Employment must cover the work date, corrections close seven days after it, and existing evidence cannot be removed. A correction whose baseline no longer matches the current effective evidence reports `EVIDENCE_CHANGED` instead of overwriting it.
+
+## Leave API
+
+Paths are under `/api/v1`. Quantities are integer half units; a full day is two units.
+
+| Method | Path | Request / purpose |
+| --- | --- | --- |
+| POST | `/leave/entitlements/opening` | `employeePublicId`, `year`, `halfUnits`, `businessReference`, `source`, `reason`; one opening per employee/year |
+| POST | `/leave/entitlements/adjustments` | Same body with signed `halfUnits`; may not underfund reserved or consumed capacity |
+| GET | `/leave/entitlements?employeePublicId&year` | `granted`, `adjusted`, `consumed`, `reserved`, `available` |
+| GET | `/leave/entitlements/ledger?employeePublicId&year&afterEntryId?` | Append-only ledger with bounded continuation |
+| POST | `/leave/requests` | `employeePublicId`, `fromDate`, `toDate`, `portion` (`FULL`, `FIRST_HALF`, `SECOND_HALF`), `reason`; owner draft |
+| POST | `/leave/requests/{id}/edit` | `expectedVersion` query parameter plus the draft body |
+| POST | `/leave/requests/{id}/{action}` | `employeePublicId`, `expectedVersion`, `reason?`, `reviewerAccountPublicId?`, `step?`, `fallback?`; actions `submit`, `resubmit`, `discard`, `withdraw`, `approve`, `reject`, `return`, `reassign`, `retry-route` |
+| GET | `/leave/requests`, `/leave/requests/{id}` | Scoped queue (`employeePublicId`, `after?`, `limit`) and detail |
+| GET | `/leave/requests/{id}/history` | Bounded request timeline |
+| GET | `/leave/requests/{id}/portions` | Captured work portions for one request |
+| POST | `/leave/requests/{id}/cancellations` | Whole-cancellation request with `employeePublicId`, `expectedVersion`, `reason` |
+| POST | `/leave/requests/{id}/cancellations/{cancellationId}/{action}` | Same action body; actions `withdraw`, `approve`, `reject`, `reassign`, `retry-route` |
+| GET | `/leave/requests/{id}/cancellations/{cancellationId}`, `/history` | Cancellation detail and bounded timeline |
+| POST | `/approval/leave-rule-sets`, `/approval/leave-rule-sets/activate` | `rules` (`ruleId`, `priority`, `orgUnit`, designated manager/HR/cancellation accounts); separate publication and activation |
+| GET | `/approval/leave-rule-sets/route-preview` | `employeePublicId`; advisory route with blocked reason |
+| GET | `/leave/portions` | `employeePublicId`, `from`, `to`, `after?`, `limit`; final approved and cancelled portions only, without private notes |
+
+Requests cover one calendar year: either a `FULL` range of scheduled non-holiday dates or a single `FIRST_HALF`/`SECOND_HALF` date, submitted before the first occurrence starts. Submission reserves available capacity and captures canonical work context; blocked pending routes still hold the reservation. Approval advances manager then designated HR, and only the final HR step consumes the reservation. Return, rejection and withdrawal release only their own effects, and resubmission restarts both steps with fresh organization context. Cancellation is whole: pending, rejected or withdrawn cancellations keep the original consumption, and an approved one reverses it exactly once.
+
 ## Command and operational boundaries
 
 Command identity is scoped by actor, command type, and idempotency key. Equivalent canonical payloads replay a successful result after current authorization is rechecked; changing the payload under the same identity returns `409`. Domain mutations, receipts, audit records, and outbox records share a transaction. Activation admission and rejection audit use the separate transactions described above. Receipts carry a seven-day retention deadline.
 
-Outbox persistence records pending events; no implemented dispatcher publishes them or delivers invitations to an external provider. Initial accounts and privileged roles require controlled database provisioning. Runtime credentials must have the identity/organization table grants as well as foundation permissions, while audit permissions remain append-only.
+Outbox persistence records pending events; no implemented dispatcher publishes them or delivers invitations to an external provider. Initial accounts and privileged roles require controlled database provisioning. The provisioning script issues the identity, organization, profile, attendance and leave grants explicitly, revokes stale table and sequence privileges before re-granting, and keeps audit access at `SELECT, INSERT`; rerun it after migrations, including when upgrading a role provisioned by an earlier script.
 
 Upgrade migrations remove legacy plaintext invitation secrets from command receipts and fail closed for unusable replay payloads. Potential exposure revokes outstanding invitations. SQL cleanup does not erase historical backups or WAL: restricted retention and isolated, migrated restores remain operator responsibilities. Interval-order migration rejects invalid existing assignments rather than rewriting their history.
 
@@ -219,6 +273,10 @@ The verification path is:
 ./gradlew check bootJar --no-daemon --console=plain
 ```
 
-Local verification on October 14, 2026 ran `check bootJar` successfully after all acceptance corrections. Unit/JPA/HTTP: 260 cases, 259 passed and one pre-existing optional skip. PostgreSQL: 89 cases, all passed, including 15 workflow concurrency/rollback cases. Merged coverage is 3,661/3,804 lines (96.24%) and 1,118/1,253 branches (89.23%); both 85% gates pass. The application JAR built successfully.
+Local verification on November 10, 2026 ran `./gradlew check` successfully. Unit tests: 372 cases, 371 passed with one optional skip. PostgreSQL: 173 cases, all passed, including workflow concurrency, rollback and provisioning cases. Merged coverage is 5,985/6,298 lines (95.03%) and 2,216/2,602 branches (85.17%); both 85% gates pass.
 
-Local verification and remote required-check enforcement are separate evidence. A remote CI run for the delivered revision and repository protection settings remain unverified. Frontend delivery, notification delivery and production readiness remain outside the implemented backend scope.
+Local verification and remote required-check enforcement are separate evidence. A remote CI run passed for the delivered revision; repository protection enforcement remains unverified. Frontend delivery, notification delivery and production readiness remain outside the implemented backend scope.
+
+### Provisioning and defensive-path coverage
+
+`RuntimeProvisioningPostgresTest` creates a role that already holds stale UPDATE/DELETE/TRUNCATE privileges, executes the provisioning script against an isolated schema, and asserts the stale privileges are gone and only the intended grants remain, including read access to identity and activation tables. `pendingCorrectionReportsEvidenceChangedWhenPinnedEvidenceAppears` covers the stale-evidence listing. Its missing-pinned-occurrence companion is unreachable by schema invariant: `attendance_correction_revision.occurrence_id` references `attendance_occurrence(id)` without cascade, and the occurrence trigger rejects update, delete and truncate.

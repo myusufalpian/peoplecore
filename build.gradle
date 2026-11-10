@@ -1,3 +1,6 @@
+import java.security.MessageDigest
+import java.util.HexFormat
+
 plugins {
 	id 'java'
 	id 'jacoco'
@@ -24,6 +27,19 @@ repositories {
 def coverageMinimum = new BigDecimal('0.85')
 def jacocoTestExecutionData = layout.buildDirectory.file('jacoco/test.exec')
 def postgresExecutionData = layout.buildDirectory.file('jacoco/postgresIntegrationTest.exec')
+def documentParserPdfBoxVersion = '3.0.8'
+
+configurations {
+	documentParserRuntime
+}
+
+sourceSets {
+	documentParser {
+		java.srcDir 'src/documentParser/java'
+		compileClasspath = configurations.documentParserRuntime
+		runtimeClasspath = output + configurations.documentParserRuntime
+	}
+}
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
@@ -37,6 +53,7 @@ dependencies {
 	implementation 'org.flywaydb:flyway-database-postgresql'
 	implementation platform('software.amazon.awssdk:bom:2.42.33')
 	implementation 'software.amazon.awssdk:s3'
+	documentParserRuntime "org.apache.pdfbox:pdfbox:${documentParserPdfBoxVersion}"
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	runtimeOnly 'org.postgresql:postgresql'
 	annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
@@ -47,11 +64,59 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	testImplementation "org.apache.pdfbox:pdfbox:${documentParserPdfBoxVersion}"
 	testRuntimeOnly 'com.h2database:h2'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+tasks.register('documentParserInventory') {
+	inputs.files(configurations.documentParserRuntime)
+	def inventory = layout.buildDirectory.file('document-parser-inventory.json')
+	outputs.file(inventory)
+	doLast {
+		def entries = configurations.documentParserRuntime.resolvedConfiguration.resolvedArtifacts.collect { artifact ->
+			def coordinate = artifact.moduleVersion.id
+			[ group: coordinate.group, name: artifact.name, version: coordinate.version, file: artifact.file.name,
+			  sha256: HexFormat.of().formatHex(MessageDigest.getInstance('SHA-256').digest(artifact.file.bytes)) ]
+		}.sort { a, b -> "${a.group}:${a.name}:${a.version}" <=> "${b.group}:${b.name}:${b.version}" }
+		inventory.get().asFile.text = groovy.json.JsonOutput.toJson([components: entries])
+	}
+}
+
+tasks.register('documentParserRuntimeFiles', Sync) {
+	dependsOn tasks.named('documentParserJar')
+	into layout.buildDirectory.dir('document-parser-runtime')
+	from(tasks.named('documentParserJar').flatMap { it.archiveFile }) { rename { 'document-parser.jar' } }
+	from(configurations.documentParserRuntime) { into 'lib' }
+	from(layout.buildDirectory.file('document-parser-inventory.json')) { rename { 'inventory.json' } }
+}
+
+tasks.register('documentParserJar', Jar) {
+	dependsOn tasks.named('documentParserClasses')
+	dependsOn tasks.named('documentParserInventory')
+	archiveClassifier = 'document-parser'
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+	manifest { attributes 'Main-Class': 'id.mydev.peoplecore.document.parser.DocumentParser' }
+	from sourceSets.documentParser.output
+	from { configurations.documentParserRuntime.collect { it.isDirectory() ? it : zipTree(it) } }
+	exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+}
+
+tasks.named('bootJar') {
+	dependsOn tasks.named('documentParserRuntimeFiles')
+	from(tasks.named('documentParserJar').flatMap { it.archiveFile }) {
+		into 'BOOT-INF/classes/document-parser'
+		rename { 'document-parser.jar' }
+	}
+	from(layout.buildDirectory.file('document-parser-inventory.json')) {
+		into 'BOOT-INF/classes/document-parser'
+		rename { 'inventory.json' }
+	}
+}
+
 tasks.named('test') {
+	dependsOn tasks.named('documentParserJar')
+	systemProperty 'peoplecore.document.parser.test-jar', tasks.named('documentParserJar').flatMap { it.archiveFile }.get().asFile.absolutePath
 	useJUnitPlatform { excludeTags 'postgres' }
 	inputs.property('localR2S3Endpoint', providers.environmentVariable('PEOPLECORE_R2_LOCAL_S3_ENDPOINT').orElse(''))
 	finalizedBy tasks.named('jacocoTestReport')

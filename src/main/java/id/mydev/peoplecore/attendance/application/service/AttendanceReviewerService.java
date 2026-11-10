@@ -31,6 +31,7 @@ public class AttendanceReviewerService {
     public record ActivateRules(UUID ruleSetId, String reason) { }
     public record RuleResult(UUID publicId, String status) { }
     public record Route(Long reviewerId, String blockedReason) { }
+    public record Preview(UUID ruleSetPublicId, UUID reviewerAccountPublicId, String blockedReason) { }
     private final JdbcTemplate jdbc;
     private final AccountAccessService access;
     private final EmployeeService employees;
@@ -113,6 +114,26 @@ public class AttendanceReviewerService {
             return new Route(null,"REVIEWER_UNAVAILABLE");
         }
         return new Route(account.get().getId(),null);
+    }
+
+    @Transactional
+    public Preview preview(UUID employeePublicId, Authentication caller) {
+        admission.acquire(AdmissionGuard.Mode.SHARED);
+        Instant at=Instant.now(clock);
+        Employee employee=employees.requireInternalByPublicId(employeePublicId);
+        UserAccount actor=access.requireActive(caller,at);
+        access.requireEmployeeRead(actor,employeePublicId,
+            employees.currentOrgUnit(employee.getId(),at).orElse(null),at);
+        Route route=resolve(employee,at);
+        UUID reviewer=route.reviewerId()==null ? null
+            : access.findAccountById(route.reviewerId()).map(UserAccount::getPublicId).orElse(null);
+        return new Preview(activeRuleSetPublicId(),reviewer,route.blockedReason());
+    }
+
+    private UUID activeRuleSetPublicId() {
+        return jdbc.query("SELECT s.public_id FROM attendance_rule_activation a "
+            + "JOIN attendance_rule_set s ON s.public_id=a.rule_set_id ORDER BY a.id DESC LIMIT 1",
+            (rs,row)->rs.getObject(1,UUID.class)).stream().findFirst().orElse(null);
     }
 
     public boolean eligible(UserAccount reviewer, Employee employee, Instant at, boolean fallback) {

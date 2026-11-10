@@ -109,6 +109,24 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.leave.application.service.LeaveWorkflowService> leaveWorkflows;
 
+    private static final Set<String> PAYSLIP_COMMANDS = Set.of(
+        "PAYSLIP_BATCH_CREATE", "PAYSLIP_BATCH_EDIT", "PAYSLIP_BATCH_REVIEW", "PAYSLIP_BATCH_PUBLISH");
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.payslip.application.PayslipService> payslips;
+
+    private static final Set<String> REIMBURSEMENT_COMMANDS = Set.of(
+        "REIMBURSEMENT_CREATE", "REIMBURSEMENT_EDIT", "REIMBURSEMENT_SUBMIT", "REIMBURSEMENT_RESUBMIT",
+        "REIMBURSEMENT_WITHDRAW", "REIMBURSEMENT_REASSIGN", "REIMBURSEMENT_RETRY_ROUTE",
+        "REIMBURSEMENT_APPROVE", "REIMBURSEMENT_REJECT", "REIMBURSEMENT_RETURN",
+        "REIMBURSEMENT_RECORD_PAYMENT", "REIMBURSEMENT_CORRECT_PAYMENT", "REIMBURSEMENT_CATEGORY_PUBLISH");
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.reimbursement.application.service.ReimbursementWorkflowService> reimbursements;
+
+    private static final Set<String> DOCUMENT_COMMANDS = Set.of(
+        "DOCUMENT_CREATE", "DOCUMENT_RESERVE_UPLOAD", "DOCUMENT_FINALIZE");
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.document.application.command.DocumentCommands> documents;
+
     private final AccountAccessService access;
     private final EmployeeService employees;
     private final EnrollmentService enrollments;
@@ -141,6 +159,18 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         }
         if (LEAVE_WORKFLOW_COMMANDS.contains(command.commandType())) {
             leaveWorkflows.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (PAYSLIP_COMMANDS.contains(command.commandType())) {
+            payslips.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (REIMBURSEMENT_COMMANDS.contains(command.commandType())) {
+            reimbursements.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (DOCUMENT_COMMANDS.contains(command.commandType())) {
+            documents.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
             return;
         }
         if ("LEAVE_OPENING".equals(command.commandType()) || "LEAVE_ADJUSTMENT".equals(command.commandType())) {
@@ -212,6 +242,19 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         if (LEAVE_WORKFLOW_COMMANDS.contains(command.commandType())) {
             leaveWorkflows.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()),
                 recordedResult(recordedResult), caller);
+            return;
+        }
+        if (PAYSLIP_COMMANDS.contains(command.commandType())) {
+            payslips.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()), recordedResult, caller);
+            return;
+        }
+        if (REIMBURSEMENT_COMMANDS.contains(command.commandType())) {
+            reimbursements.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()),
+                recordedResult(recordedResult), caller);
+            return;
+        }
+        if (DOCUMENT_COMMANDS.contains(command.commandType())) {
+            documents.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()), caller);
             return;
         }
         if ("LEAVE_OPENING".equals(command.commandType()) || "LEAVE_ADJUSTMENT".equals(command.commandType())) {

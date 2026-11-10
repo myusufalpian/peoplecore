@@ -254,6 +254,21 @@ class AttendanceRecordingAcceptancePostgresTest {
     }
 
     @Test
+    void pendingCorrectionReportsEvidenceChangedWhenPinnedEvidenceAppears() {
+        var draft=draft();
+        var pending=commands.act(member,key(),"SUBMIT",action(draft,null,null,null,null));
+        assertEquals("PENDING",pending.status());
+        as(member);
+        clock.at(START.plusSeconds(60));
+        commands.clock(member,key(),new ClockPayload(Action.IN),clock.instant());
+        var listed=corrections.list(employee,DATE,DATE,"PENDING",0,10,member).rows();
+        assertEquals(1,listed.size());
+        assertEquals(pending.publicId(),listed.getFirst().publicId());
+        assertEquals("PENDING",listed.getFirst().status());
+        assertEquals("EVIDENCE_CHANGED",listed.getFirst().blockedReason());
+    }
+
+    @Test
     void correctionReturnEditResubmitThenWithdrawKeepsPriorRevision() {
         var draft=draft();
         var pending=commands.act(member,key(),"SUBMIT",action(draft,null,null,null,null));
@@ -398,6 +413,29 @@ class AttendanceRecordingAcceptancePostgresTest {
         assertThrows(AccessDeniedException.class,()->reviewers.activate(new ActivateRules(activeRule,"Not organization-wide"),manager));
         var managerAccount=accounts.findByOidcIssuerAndOidcSubject(ISSUER,manager.getName()).orElseThrow();
         assertFalse(reviewers.eligible(managerAccount,employeeRows.findByPublicId(employee).orElseThrow(),START,true));
+    }
+
+    @Test
+    void attendanceRoutePreviewReportsActiveConfigurationAndCurrentReviewer() {
+        UUID activeSet=jdbc.queryForObject("SELECT s.public_id FROM attendance_rule_activation a "
+            + "JOIN attendance_rule_set s ON s.public_id=a.rule_set_id ORDER BY a.id DESC LIMIT 1",UUID.class);
+        UserAccount managerAccount=accounts.findByOidcIssuerAndOidcSubject(ISSUER,manager.getName()).orElseThrow();
+
+        var preview=reviewers.preview(employee,hr);
+        assertEquals(activeSet,preview.ruleSetPublicId());
+        assertEquals(managerAccount.getPublicId(),preview.reviewerAccountPublicId());
+        assertEquals(null,preview.blockedReason());
+        assertEquals(managerAccount.getPublicId(),reviewers.preview(employee,member).reviewerAccountPublicId());
+
+        Authentication outsider=employeeWithoutContext("outsider");
+        assertThrows(ResourceNotFoundException.class,()->reviewers.preview(employee,outsider));
+
+        var unmatched=reviewers.publish(new PublishRules(UUID.randomUUID(),List.of(new Rule(UUID.randomUUID(),1,"FIN",null))),hr);
+        reviewers.activate(new ActivateRules(unmatched.publicId(),"Unmatched configuration"),hr);
+        var blocked=reviewers.preview(employee,hr);
+        assertEquals(unmatched.publicId(),blocked.ruleSetPublicId());
+        assertEquals(null,blocked.reviewerAccountPublicId());
+        assertEquals("NO_MATCHING_RULE",blocked.blockedReason());
     }
 
     @Test

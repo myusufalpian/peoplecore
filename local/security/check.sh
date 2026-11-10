@@ -17,6 +17,9 @@ scan_sbom() {
   fi
 }
 scan_sbom "$report_dir/backend.cdx.json" backend backend-maintainer
+"$trivy_bin" rootfs --scanners vuln --format cyclonedx --output "$report_dir/document-parser.cdx.json" build/document-parser-runtime/lib/
+python3 local/security/validate_document_parser_inventory.py "$report_dir/document-parser.cdx.json" build/document-parser-runtime build/libs
+scan_sbom "$report_dir/document-parser.cdx.json" document-parser backend-maintainer
 images=$(docker compose config --images | sort -u)
 test -n "$images"
 sqs_image=$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["sqs"]["image"])')
