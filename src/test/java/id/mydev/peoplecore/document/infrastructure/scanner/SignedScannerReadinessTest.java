@@ -93,6 +93,64 @@ class SignedScannerReadinessTest {
             "document-worker", POD, Duration.ZERO, Duration.ofHours(1), Clock.fixed(NOW, ZoneOffset.UTC)));
     }
 
+    @Test
+    void rejectsUnsupportedTrustConfiguration() throws Exception {
+        KeyPair ed25519 = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        KeyPair rsa = KeyPairGenerator.getInstance("RSA").generateKeyPair();
+        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        assertThrows(IllegalArgumentException.class, () -> new SignedScannerReadiness(challenge -> null,
+            ed25519.getPublic(), " ", POD, Duration.ofSeconds(30), Duration.ofHours(1), clock));
+        assertThrows(IllegalArgumentException.class, () -> new SignedScannerReadiness(challenge -> null,
+            rsa.getPublic(), "document-worker", POD, Duration.ofSeconds(30), Duration.ofHours(1), clock));
+        assertThrows(IllegalArgumentException.class, () -> new SignedScannerReadiness(challenge -> null,
+            ed25519.getPublic(), "document-worker", POD, Duration.ofSeconds(-1), Duration.ofHours(1), clock));
+        assertThrows(IllegalArgumentException.class, () -> new SignedScannerReadiness(challenge -> null,
+            ed25519.getPublic(), "document-worker", POD, Duration.ofSeconds(30), Duration.ofHours(-1), clock));
+    }
+
+    @Test
+    void rejectsMissingEvidenceOrSignature() throws Exception {
+        KeyPair keys = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        assertThrows(IOException.class, () -> readiness(keys, challenge ->
+            new SignedScannerReadiness.SignedEvidence(null, new byte[64])).current());
+        assertThrows(IOException.class, () -> readiness(keys, challenge ->
+            new SignedScannerReadiness.SignedEvidence(evidence(challenge, POD, NOW.minusSeconds(1), true), null)).current());
+    }
+
+    @Test
+    void rejectsMalformedAssertionsAndUnsafeScannerFlags() throws Exception {
+        KeyPair keys = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        assertThrows(IOException.class, () -> signed(keys, challenge -> new SignedScannerReadiness.Evidence(challenge,
+            "document-worker", POD, GENERATION, " ", "test-db", DIGEST, DIGEST, NOW.minusSeconds(1),
+            NOW.plusSeconds(10), NOW.minusSeconds(1), true, true)).current());
+        assertThrows(IOException.class, () -> signed(keys, challenge -> new SignedScannerReadiness.Evidence(challenge,
+            "document-worker", POD, GENERATION, "clamav", "x".repeat(256), DIGEST, DIGEST, NOW.minusSeconds(1),
+            NOW.plusSeconds(10), NOW.minusSeconds(1), true, true)).current());
+        assertThrows(IOException.class, () -> signed(keys, challenge -> new SignedScannerReadiness.Evidence(challenge,
+            "document-worker", POD, GENERATION, "clamav", "test-db", "z".repeat(64), DIGEST, NOW.minusSeconds(1),
+            NOW.plusSeconds(10), NOW.minusSeconds(1), true, true)).current());
+        assertThrows(IOException.class, () -> readiness(keys, challenge -> new SignedScannerReadiness.SignedEvidence(
+            new SignedScannerReadiness.Evidence(challenge, "document-worker", POD, GENERATION, "clamav", "test-db",
+                DIGEST, DIGEST, null, NOW.plusSeconds(10), NOW.minusSeconds(1), true, true), new byte[64])).current());
+        assertThrows(IOException.class, () -> readiness(keys, challenge -> new SignedScannerReadiness.SignedEvidence(
+            new SignedScannerReadiness.Evidence(challenge, "document-worker", POD, GENERATION, "clamav", "test-db",
+                DIGEST, DIGEST, NOW.minusSeconds(1), null, NOW.minusSeconds(1), true, true), new byte[64])).current());
+        assertThrows(IOException.class, () -> signed(keys, challenge -> new SignedScannerReadiness.Evidence(challenge,
+            "document-worker", POD, GENERATION, "clamav", "test-db", DIGEST, DIGEST, NOW.minusSeconds(1),
+            NOW.plusSeconds(10), NOW.minusSeconds(1), false, true)).current());
+        assertThrows(IOException.class, () -> signed(keys, challenge -> new SignedScannerReadiness.Evidence(challenge,
+            "document-worker", POD, GENERATION, "clamav", "test-db", DIGEST, DIGEST, NOW.minusSeconds(1),
+            NOW.plusSeconds(10), NOW.minusSeconds(1), true, false)).current());
+        assertThrows(IOException.class, () -> signed(keys, challenge -> new SignedScannerReadiness.Evidence(challenge,
+            "document-worker", POD, GENERATION, "clamav", "test-db", DIGEST, DIGEST, NOW.minusSeconds(1),
+            NOW.plusSeconds(10), NOW.minusSeconds(3600), true, true)).current());
+    }
+
+    private static SignedScannerReadiness signed(KeyPair keys, java.util.function.Function<UUID, SignedScannerReadiness.Evidence> evidence) {
+        return new SignedScannerReadiness(challenge -> sign(keys, evidence.apply(challenge)), keys.getPublic(),
+            "document-worker", POD, Duration.ofSeconds(30), Duration.ofHours(1), Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
     private static SignedScannerReadiness readiness(KeyPair keys, SignedScannerReadiness.EvidenceSource source) {
         return new SignedScannerReadiness(source, keys.getPublic(), "document-worker", POD,
             Duration.ofSeconds(30), Duration.ofHours(1), Clock.fixed(NOW, ZoneOffset.UTC));

@@ -273,7 +273,7 @@ The verification path is:
 ./gradlew check bootJar --no-daemon --console=plain
 ```
 
-Local verification on November 10, 2026 ran `./gradlew check` successfully. Unit tests: 372 cases, 371 passed with one optional skip. PostgreSQL: 173 cases, all passed, including workflow concurrency, rollback and provisioning cases. Merged coverage is 5,985/6,298 lines (95.03%) and 2,216/2,602 branches (85.17%); both 85% gates pass.
+Local verification on November 10, 2026 ran `./gradlew check` successfully. Unit tests: 484 cases, 483 passed with one optional skip. PostgreSQL: 210 cases, all passed, including workflow concurrency, rollback and provisioning cases. Merged coverage is 7,635/8,126 lines (93.96%) and 3,018/3,523 branches (85.67%); both 85% gates pass.
 
 Local verification and remote required-check enforcement are separate evidence. A remote CI run passed for the delivered revision; repository protection enforcement remains unverified. Frontend delivery, notification delivery and production readiness remain outside the implemented backend scope.
 

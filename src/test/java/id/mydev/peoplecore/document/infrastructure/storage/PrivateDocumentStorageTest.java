@@ -2,6 +2,7 @@ package id.mydev.peoplecore.document.infrastructure.storage;
 
 import java.time.Duration;
 import java.util.UUID;
+import id.mydev.peoplecore.document.application.service.DocumentContentInspector;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -90,5 +91,34 @@ class PrivateDocumentStorageTest {
         storage.openCandidate(UUID.randomUUID()).close();
 
         verify(response).abort();
+    }
+
+    @Test
+    void rejectsMissingBucketAndOutOfRangeUploadValidity() {
+        assertThrows(IllegalArgumentException.class, () -> new PrivateDocumentStorage(client, presigner, null, claim));
+        assertThrows(IllegalArgumentException.class, () -> new PrivateDocumentStorage(client, presigner, " ", claim));
+        UUID upload = UUID.randomUUID();
+        assertThrows(IllegalArgumentException.class,
+            () -> storage.presignUpload(upload, "application/pdf", Duration.ZERO));
+        assertThrows(IllegalArgumentException.class,
+            () -> storage.presignUpload(upload, "application/pdf", Duration.ofSeconds(-1)));
+    }
+
+    @Test
+    void rejectsStagingObjectsWithoutUsableSizeOrEtag() {
+        UUID upload = UUID.randomUUID();
+        when(client.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+            .contentLength((Long) null).eTag("etag").build());
+        assertThrows(IllegalArgumentException.class, () -> storage.headStaging(upload, 12));
+        when(client.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+            .contentLength(0L).eTag("etag").build());
+        assertThrows(IllegalArgumentException.class, () -> storage.headStaging(upload, 0));
+        long oversized = DocumentContentInspector.MAX_BYTES + 1;
+        when(client.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+            .contentLength(oversized).eTag("etag").build());
+        assertThrows(IllegalArgumentException.class, () -> storage.headStaging(upload, oversized));
+        when(client.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+            .contentLength(12L).eTag(" ").build());
+        assertThrows(IllegalArgumentException.class, () -> storage.headStaging(upload, 12));
     }
 }
