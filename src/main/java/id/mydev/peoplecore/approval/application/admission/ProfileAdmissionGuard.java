@@ -67,7 +67,26 @@ public class ProfileAdmissionGuard implements AdmissionGuard {
         "LEAVE_CANCELLATION_APPROVE",
         "LEAVE_CANCELLATION_REJECT",
         "LEAVE_CANCELLATION_REASSIGN",
-        "LEAVE_CANCELLATION_RETRY_ROUTE");
+        "LEAVE_CANCELLATION_RETRY_ROUTE",
+        "PAYSLIP_BATCH_CREATE",
+        "PAYSLIP_BATCH_EDIT",
+        "PAYSLIP_BATCH_REVIEW",
+        "PAYSLIP_BATCH_PUBLISH",
+        "DOCUMENT_CREATE",
+        "DOCUMENT_RESERVE_UPLOAD",
+        "DOCUMENT_FINALIZE",
+        "REIMBURSEMENT_CREATE",
+        "REIMBURSEMENT_EDIT",
+        "REIMBURSEMENT_SUBMIT",
+        "REIMBURSEMENT_RESUBMIT",
+        "REIMBURSEMENT_WITHDRAW",
+        "REIMBURSEMENT_REASSIGN",
+        "REIMBURSEMENT_RETRY_ROUTE",
+        "REIMBURSEMENT_APPROVE",
+        "REIMBURSEMENT_REJECT",
+        "REIMBURSEMENT_RETURN",
+        "REIMBURSEMENT_RECORD_PAYMENT",
+        "REIMBURSEMENT_CORRECT_PAYMENT");
 
     private static final Set<String> EXCLUSIVE_COMMANDS = Set.of(
         "PROFILE_RULE_PUBLISH",
@@ -91,7 +110,8 @@ public class ProfileAdmissionGuard implements AdmissionGuard {
         "ATTENDANCE_RULE_PUBLISH",
         "ATTENDANCE_RULE_ACTIVATE",
         "LEAVE_RULE_PUBLISH",
-        "LEAVE_RULE_ACTIVATE");
+        "LEAVE_RULE_ACTIVATE",
+        "REIMBURSEMENT_CATEGORY_PUBLISH");
 
     private final JdbcTemplate jdbc;
     private final boolean postgres;

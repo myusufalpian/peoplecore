@@ -39,4 +39,19 @@ class AttendanceTimePolicyTest {
             START,START,null,null,END));
         AttendanceTimePolicy.validatePair(START,END,START,END,null,null,END);
     }
+    @Test void correctionsRejectMissingFutureOutOfWindowAndUnorderedActions() {
+        assertThrows(IllegalArgumentException.class,()->AttendanceTimePolicy.validatePair(START,END,
+            null,END,null,null,END));
+        assertThrows(IllegalArgumentException.class,()->AttendanceTimePolicy.validatePair(START,END,
+            START.minusSeconds(7201),null,null,null,END));
+        assertThrows(IllegalArgumentException.class,()->AttendanceTimePolicy.validatePair(START,END,
+            START.plusSeconds(1),null,null,null,START));
+        assertThrows(IllegalArgumentException.class,()->AttendanceTimePolicy.validatePair(START,END,
+            START,END.plusSeconds(14401),null,null,END.plusSeconds(14401)));
+        assertThrows(IllegalArgumentException.class,()->AttendanceTimePolicy.validatePair(START,END,
+            START.plusSeconds(1),START,null,null,END));
+        assertThrows(IllegalArgumentException.class,()->AttendanceTimePolicy.validatePair(START,END,
+            START,END.plusSeconds(1),null,null,END));
+        AttendanceTimePolicy.validatePair(START,END,START,END,START,null,END);
+    }
 }

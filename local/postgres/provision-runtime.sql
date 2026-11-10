@@ -10,6 +10,11 @@ GRANT USAGE ON SCHEMA public TO peoplecore_runtime;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM peoplecore_runtime;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON command_receipts, outbox_events, user_accounts, employees TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON role_assignments, account_bindings, employee_assignments,
+    enrollment_invitations, activation_admission_lock TO peoplecore_runtime;
+GRANT SELECT, UPDATE ON auth_generation TO peoplecore_runtime;
+GRANT SELECT, INSERT, DELETE ON activation_attempts TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON activation_budget_slots TO peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE ON profile_rule_sets, profile_rules, profile_rule_current_activation TO peoplecore_runtime;
 GRANT SELECT, INSERT ON profile_rule_activations TO peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE ON employee_contact_profile, profile_proposal, profile_assignment TO peoplecore_runtime;
@@ -19,6 +24,14 @@ GRANT SELECT, INSERT, UPDATE ON work_schedule_revision, holiday_calendar_revisio
 GRANT SELECT, INSERT, UPDATE ON attendance_account TO peoplecore_runtime;
 GRANT SELECT, INSERT ON work_schedule_day, holiday_date, attendance_occurrence TO peoplecore_runtime;
 GRANT SELECT, INSERT, UPDATE ON employee_schedule_assignment, employee_calendar_assignment TO peoplecore_runtime;
+GRANT SELECT, INSERT ON document_version TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON document_account, private_document, document_upload_attempt, document_verification_attempt, document_hold TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON reimbursement_account, reimbursement_claim, reimbursement_revision, reimbursement_review_assignment, reimbursement_category_revision TO peoplecore_runtime;
+GRANT SELECT, INSERT ON reimbursement_evidence, reimbursement_decision,
+    reimbursement_payment, reimbursement_payment_correction, reimbursement_history TO peoplecore_runtime;
+GRANT SELECT, INSERT, DELETE ON reimbursement_draft_evidence TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON payslip_batch, payslip_batch_revision, payslip_current TO peoplecore_runtime;
+GRANT SELECT, INSERT ON payslip_batch_item, payslip_publication TO peoplecore_runtime;
 REVOKE ALL ON audit_events FROM peoplecore_runtime;
 GRANT SELECT, INSERT ON clock_event, attendance_effective_revision, attendance_correction_revision,
     attendance_correction_assignment, attendance_correction_decision, attendance_rule, attendance_rule_activation TO peoplecore_runtime;

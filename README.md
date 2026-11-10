@@ -80,7 +80,7 @@ Enrollment supports invitation issuance/reissue, activation, offboarding, rebind
 
 Business endpoints require a verified JWT identity. Account status, access cutoff, active database role assignments, and current organization scope determine access; token role claims do not grant HRIS roles. Own-employee reads require a current binding and an effective role. Invitation issue/reissue and identity rebind require both applicable HR scope and an effective organization-wide `SYSTEM_ADMIN` grant. The shared HTTP chain retains Basic authentication, but Basic credentials do not satisfy these business identity checks.
 
-Attendance and annual-leave APIs use `/api/v1/attendance`, `/api/v1/leave`, `/api/v1/employees/{id}/work-context`, and `/api/v1/approval/{attendance,leave}-rule-sets`. They cover schedule/calendar revision catalogs and assignments, clock actions and correction history, annual entitlement/ledger, leave requests and whole cancellation. Owner, current reviewer and scoped-HR access is rechecked on reads, commands and replay. Module ownership, lock order and canonical evidence are described in [architecture.md](architecture.md#attendance-and-annual-leave).
+Attendance and annual-leave APIs use `/api/v1/attendance`, `/api/v1/leave`, `/api/v1/employees/{id}/work-context`, and `/api/v1/approval/{attendance,leave}-rule-sets`. They cover schedule/calendar revision catalogs and assignments, clock actions and correction history, annual entitlement/ledger, leave requests and whole cancellation. Both rule-set families expose an advisory route preview; the attendance preview returns the active configuration public UUID, the current reviewer account public UUID, and any blocked reason. Owner, current reviewer and scoped-HR access is rechecked on reads, commands and replay. Module ownership, lock order and canonical evidence are described in [architecture.md](architecture.md#attendance-and-annual-leave).
 
 Mutations require `Idempotency-Key`. Command receipts, before/after audit details where applicable, and outbox records commit atomically with domain changes. Replay rechecks current authorization, and changed payloads conflict. Outbox records are durable pending events; persisting one does not mean an external provider has delivered a notification.
 
@@ -107,14 +107,7 @@ export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
 docker compose --profile provision run --rm postgres-runtime-provision
 ```
 
-The provisioning script grants common command, contact-profile, attendance and leave permissions, including append-only history and audit access. Using the schema owner, also grant access to the implemented identity and organization tables before running their endpoints:
-
-```sql
-GRANT SELECT, INSERT, UPDATE, DELETE ON
-  role_assignments, auth_generation, employee_assignments, enrollment_invitations,
-  account_bindings, activation_attempts, activation_budget_slots, activation_admission_lock
-TO peoplecore_runtime;
-```
+The provisioning script grants foundation, identity, organization, contact-profile, attendance and leave permissions, including append-only history and audit access. It revokes stale table and sequence privileges before re-granting, so rerun it with owner credentials after applying migrations; a runtime role provisioned only by an older script lacks the identity grants and cannot serve authenticated endpoints.
 
 Keep the existing audit-table permission limited to `SELECT, INSERT`. Provision initial accounts and role assignments through controlled owner-side administration; the API has no administrator bootstrap endpoint.
 
@@ -146,6 +139,8 @@ PostgreSQL tests require a separate `peoplecore_tests` database, defaulting to `
 HR publishes reusable immutable configuration with `POST /api/v1/attendance/schedule-revisions` and `/calendar-revisions` (Idempotency-Key required). Current HR operators may retrieve published catalogs with GET on those paths (`page=0&size=20`, maximum size 100), and full configuration with GET `/{id}`. Employee identities do not grant catalog access.
 
 Use `POST /api/v1/attendance/publish-preview` before assigning a revision. Assignment commands under `/api/v1/employees/{employeeId}/schedule-assignments` and `/calendar-assignments` require `expectedFingerprint`; stale context returns 409 and requires a new preview. Publish itself has no fingerprint because applicability changes only with assignments. Backdated assignments require a reason. `GET /api/v1/employees/{employeeId}/work-context?from=2026-10-01&to=2026-11-01` returns the half-open range, at most 366 days, without pinning evidence. Missing context appears as a per-date blockedReason. Owner reads require a current binding and effective role; HR reads require current target coverage.
+
+Correction routing is published and activated through `/api/v1/approval/attendance-rule-sets`. `GET /api/v1/approval/attendance-rule-sets/route-preview?employeePublicId=<uuid>` reads the currently activated configuration for one employee and returns `ruleSetPublicId`, `reviewerAccountPublicId`, and `blockedReason`. It reserves nothing, mutates nothing, and requires the same read scope as employee context: the employee's own active binding or current HR coverage of the target unit. A blocked configuration returns a null reviewer with a reason such as `NO_MATCHING_RULE`, `AMBIGUOUS_RULE`, or `REVIEWER_UNAVAILABLE`; it never falls back to another reviewer.
 
 Apply migrations using owner credentials before rerunning `local/postgres/provision-runtime.sql` for runtime grants. V14 supplies context storage, V15 seals assignment provenance, and V16–V18 define attendance recording, entitlement and leave workflow storage. All application instances must participate in the shared `profile-admission` protocol to coordinate context and authority changes with reads and commands. See [architecture](architecture.md#attendance-and-annual-leave) for admission ordering and canonical evidence.
 
