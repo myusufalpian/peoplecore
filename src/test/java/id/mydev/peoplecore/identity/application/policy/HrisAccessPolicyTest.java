@@ -18,6 +18,7 @@ import id.mydev.peoplecore.organization.domain.model.Employee;
 import id.mydev.peoplecore.support.JwtAuthFixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -37,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class HrisAccessPolicyTest {
 
@@ -58,7 +60,10 @@ class HrisAccessPolicyTest {
         new AccountAccessService(accounts, roles, bindings, generations, CLOCK);
     private final HrisAccessPolicy policy =
         new HrisAccessPolicy(access, employees, enrollments, proposals, approvalRules,
-            new ObjectMapper(), CLOCK);
+            new ObjectMapper(), CLOCK,
+            mock(ObjectProvider.class), mock(ObjectProvider.class), mock(ObjectProvider.class),
+            mock(ObjectProvider.class), mock(ObjectProvider.class), mock(ObjectProvider.class),
+            mock(ObjectProvider.class));
 
     @AfterEach
     void clearCaller() {
@@ -76,19 +81,19 @@ class HrisAccessPolicyTest {
     private UserAccount activeHrAccount() {
         UserAccount account = new UserAccount(UUID.randomUUID(), ISSUER, "hr-1", NOW);
         account.reactivate();
-        org.springframework.test.util.ReflectionTestUtils.setField(account, "id", 100L);
+        ReflectionTestUtils.setField(account, "id", 100L);
         return account;
     }
 
     private static UserAccount namedAccount(String subject, long id) {
         UserAccount account = new UserAccount(UUID.randomUUID(), ISSUER, subject, NOW);
-        org.springframework.test.util.ReflectionTestUtils.setField(account, "id", id);
+        ReflectionTestUtils.setField(account, "id", id);
         return account;
     }
 
     private static Employee employee() {
         Employee employee = new Employee(EMPLOYEE_ID, "EMP-001", NOW);
-        org.springframework.test.util.ReflectionTestUtils.setField(employee, "id", 7L);
+        ReflectionTestUtils.setField(employee, "id", 7L);
         return employee;
     }
 

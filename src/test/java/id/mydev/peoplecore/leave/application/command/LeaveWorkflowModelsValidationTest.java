@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.UUID;
 
 class LeaveWorkflowModelsValidationTest {
     private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
@@ -24,7 +25,7 @@ class LeaveWorkflowModelsValidationTest {
 
     @Test
     void actionRejectsNegativeExpectedVersion() {
-        Action action = new Action(java.util.UUID.randomUUID(), -1L, null, null, null, false);
+        Action action = new Action(UUID.randomUUID(), -1L, null, null, null, false);
 
         assertEquals(Set.of("expectedVersion"), paths(action));
     }

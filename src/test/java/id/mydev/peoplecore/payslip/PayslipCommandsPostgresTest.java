@@ -4,7 +4,7 @@ import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.CommandConflictException;
 import id.mydev.peoplecore.document.application.service.DocumentVersionContentService;
 import id.mydev.peoplecore.document.application.service.RevocableDocumentTransfer;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.RoleAssignment;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
@@ -54,6 +54,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -86,6 +87,8 @@ class PayslipCommandsPostgresTest {
     private UserAccount account;
     private Authentication caller;
     private Draft draft;
+    private UUID employeePublicId;
+    private UUID documentPublicId;
 
     @BeforeEach
     void setUp() {
@@ -94,11 +97,11 @@ class PayslipCommandsPostgresTest {
         roles.save(new RoleAssignment(account.getId(), HrisRole.FINANCE_PAYROLL, null, now.minusSeconds(60), now));
         caller = JwtAuthFixture.token(ISSUER, account.getOidcSubject());
         SecurityContextHolder.getContext().setAuthentication(caller);
-        UUID employeePublicId = UUID.randomUUID();
+        employeePublicId = UUID.randomUUID();
         long employee = jdbc.queryForObject("insert into employees(public_id,employee_number,employment_start_date,created_at) "
             + "values(?,?,date '2020-01-01',now()) returning id", Long.class, employeePublicId, "PAY-" + UUID.randomUUID());
         var document = PayslipPersistencePostgresTest.verifiedDocument(jdbc, employee);
-        UUID documentPublicId = jdbc.queryForObject("select public_id from private_document where id=?", UUID.class, document.id());
+        documentPublicId = jdbc.queryForObject("select public_id from private_document where id=?", UUID.class, document.id());
         draft = new Draft(List.of(new Item(employeePublicId, YearMonth.of(2026, 11), documentPublicId)));
     }
 
@@ -150,17 +153,36 @@ class PayslipCommandsPostgresTest {
     }
 
     @Test
-    void publishReplayWritesOneOutboxEventAndRechecksCurrentRole() {
-        var created = commands.create(caller, key(), draft);
+    void publishReplayWritesOneIntentPerPublicationAndRechecksCurrentRole() {
+        UUID secondEmployee = UUID.randomUUID();
+        long secondEmployeeId = jdbc.queryForObject("insert into employees(public_id,employee_number,employment_start_date,created_at) "
+            + "values(?,?,date '2020-01-01',now()) returning id", Long.class, secondEmployee, "PAY-" + UUID.randomUUID());
+        var secondDocument = PayslipPersistencePostgresTest.verifiedDocument(jdbc, secondEmployeeId);
+        UUID secondDocumentPublicId = jdbc.queryForObject("select public_id from private_document where id=?",
+            UUID.class, secondDocument.id());
+        Draft twoItems = new Draft(List.of(
+            new Item(employeePublicId, YearMonth.of(2026, 11), documentPublicId),
+            new Item(secondEmployee, YearMonth.of(2026, 11), secondDocumentPublicId)));
+        var created = commands.create(caller, key(), twoItems);
         commands.review(caller, key(), created.batchPublicId(), 1);
         assertThrows(ResponseStatusException.class, () -> commands.review(caller, key(), created.batchPublicId(), 1));
         String key = key();
         var published = commands.publish(caller, key, created.batchPublicId(), 1);
-        assertThrows(ResponseStatusException.class, () -> commands.edit(caller, key(), created.batchPublicId(), draft, 1));
+        assertThrows(ResponseStatusException.class, () -> commands.edit(caller, key(), created.batchPublicId(), twoItems, 1));
 
         assertEquals(published, commands.publish(caller, key, created.batchPublicId(), 1));
-        assertEquals(1, jdbc.queryForObject("select count(id) from outbox_events "
-            + "where aggregate_public_id=? and event_type='PAYSLIP_BATCH_PUBLISH'", Integer.class, created.batchPublicId()));
+        assertEquals(2, jdbc.queryForObject("select count(id) from outbox_events "
+            + "where aggregate_type='PAYSLIP_PUBLICATION' and event_type='PAYSLIP_PUBLISHED'", Integer.class));
+        assertEquals(2, jdbc.queryForObject("select count(distinct aggregate_public_id) from outbox_events "
+            + "where aggregate_type='PAYSLIP_PUBLICATION' and event_type='PAYSLIP_PUBLISHED'", Integer.class));
+        List<String> payloads = jdbc.queryForList("select payload from outbox_events "
+            + "where aggregate_type='PAYSLIP_PUBLICATION' and event_type='PAYSLIP_PUBLISHED'", String.class);
+        assertTrue(payloads.stream().anyMatch(payload -> payload.contains(employeePublicId.toString())));
+        assertTrue(payloads.stream().anyMatch(payload -> payload.contains(secondEmployee.toString())));
+        payloads.forEach(payload -> {
+            assertTrue(payload.contains("2026-11-01"));
+            assertFalse(payload.contains("document"));
+        });
         assertThrows(CommandConflictException.class, () -> commands.publish(caller, key, created.batchPublicId(), 2));
 
         jdbc.update("update role_assignments set effective_to=now() where account_id=? and role=?", account.getId(), HrisRole.FINANCE_PAYROLL);
@@ -185,7 +207,7 @@ class PayslipCommandsPostgresTest {
         assertEquals(0, jdbc.queryForObject("select count(id) from command_receipts "
             + "where command_type='PAYSLIP_BATCH_PUBLISH' and idempotency_key=?", Integer.class, publishKey));
         assertEquals(0, jdbc.queryForObject("select count(id) from outbox_events "
-            + "where aggregate_public_id=? and event_type='PAYSLIP_BATCH_PUBLISH'", Integer.class, created.batchPublicId()));
+            + "where aggregate_type='PAYSLIP_PUBLICATION' and event_type='PAYSLIP_PUBLISHED'", Integer.class));
     }
 
     @Test

@@ -54,6 +54,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.common.api.ResourceNotFoundException;
+import id.mydev.peoplecore.common.command.CommandConflictException;
+import java.time.ZoneId;
+import java.util.Collections;
+import org.springframework.dao.DataAccessException;
+import org.springframework.security.access.AccessDeniedException;
 
 @Tag("postgres")
 @SpringBootTest(properties={"peoplecore.runtime.role=api","spring.jpa.hibernate.ddl-auto=validate","peoplecore.organization.allowed-units=ENG,FIN"})
@@ -136,7 +142,7 @@ class LeaveWorkflowPostgresTest {
         authenticate(owner); request=commands.act(owner,key(),request.publicId(),"RESUBMIT",action(request.version(),null));
         assertEquals(2,request.revision()); assertEquals(2,balance().reserved());
         authenticate(hr); RequestView current=request;
-        assertThrows(org.springframework.security.access.AccessDeniedException.class,()->commands.act(hr,key(),current.publicId(),"APPROVE",action(current.version(),null)));
+        assertThrows(AccessDeniedException.class,()->commands.act(hr,key(),current.publicId(),"APPROVE",action(current.version(),null)));
     }
     @Test void withdrawReleasesOnlyOwnReservation() {
         RequestView first=submit(Portion.FULL,date); submit(Portion.FULL,date.plusDays(1));
@@ -174,7 +180,7 @@ class LeaveWorkflowPostgresTest {
         RequestView request=submit(Portion.FULL,date);
         assertNotNull(request.blockedReason());
         authenticate(owner);
-        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+        assertThrows(AccessDeniedException.class,
             ()->commands.act(owner,key(),request.publicId(),"RETRY_ROUTE",action(request.version(),"Retry")));
         jdbc.update("INSERT INTO leave_rule_current(id,rule_set_id) VALUES (1,?)",config);
         authenticate(hr);
@@ -195,7 +201,7 @@ class LeaveWorkflowPostgresTest {
         request=commands.act(hr,key(),request.publicId(),"REASSIGN",new Action(employee,request.version(),
             "Replace active HR reviewer",replacement.getPublicId(),2,false));
         RequestView current=request;
-        assertThrows(id.mydev.peoplecore.common.api.ResourceNotFoundException.class,
+        assertThrows(ResourceNotFoundException.class,
             ()->commands.act(hr,key(),current.publicId(),"APPROVE",action(current.version(),null)));
         authenticate(token(replacement));
         request=commands.act(token(replacement),key(),request.publicId(),"APPROVE",action(request.version(),null));
@@ -226,9 +232,9 @@ class LeaveWorkflowPostgresTest {
     @Test void publishRejectsInvalidDesignatedReviewerAndConfigurationShape() throws Exception {
         assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(null),hr)));
         assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(List.of()),hr)));
-        assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(java.util.Collections.singletonList(null)),hr)));
+        assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(Collections.singletonList(null)),hr)));
         Rule repeated=new Rule("repeated",1,"ENG",hrId,hrId);
-        assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(java.util.Collections.nCopies(101,repeated)),hr)));
+        assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(Collections.nCopies(101,repeated)),hr)));
         assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(List.of(
             repeated,new Rule("repeated",2,"FIN",hrId,hrId))),hr)));
         assertThrows(IllegalArgumentException.class,()->new TransactionTemplate(transactions).executeWithoutResult(status -> routing.publish(UUID.randomUUID(),new Publish(List.of(
@@ -277,13 +283,13 @@ class LeaveWorkflowPostgresTest {
     }
     @Test void foreignEmployeeCannotMutateOrRead() {
         RequestView request=submit(Portion.FULL,date); authenticate(manager);
-        assertThrows(id.mydev.peoplecore.common.api.ResourceNotFoundException.class,()->commands.act(manager,key(),request.publicId(),"WITHDRAW",action(request.version(),null)));
+        assertThrows(ResourceNotFoundException.class,()->commands.act(manager,key(),request.publicId(),"WITHDRAW",action(request.version(),null)));
         assertTrue(workflow.list(employee,owner).stream().anyMatch(r->r.publicId().equals(request.publicId())));
     }
     @Test void evidenceRowsCannotBeRewrittenByRuntime() {
         RequestView request=submit(Portion.FULL,date);
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_portion SET half=2 WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",request.publicId()));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_revision SET half_units=10 WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",request.publicId()));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_portion SET half=2 WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",request.publicId()));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_revision SET half_units=10 WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",request.publicId()));
     }
     @Test void completedManagerApprovalReplaysAfterActiveStepAdvances() {
         RequestView request=submit(Portion.FULL,date); authenticate(manager);
@@ -302,12 +308,12 @@ class LeaveWorkflowPostgresTest {
         bindings.saveAndFlush(hrBinding); bindings.saveAndFlush(managerBinding);
         bind(hrAccount,managerEmployee,Instant.now());
         authenticate(hr); RequestView current=request;
-        assertThrows(org.springframework.security.access.AccessDeniedException.class,()->commands.act(hr,key(),current.publicId(),"APPROVE",action(current.version(),null)));
+        assertThrows(AccessDeniedException.class,()->commands.act(hr,key(),current.publicId(),"APPROVE",action(current.version(),null)));
         assertEquals(0,balance().consumed()); assertEquals(2,balance().reserved());
         assertNotNull(workflow.get(request.publicId(),owner).blockedReason());
     }
     @Test void actualIntervalOverlapAcrossDifferentWorkDateLabelsIsRejected() {
-        Instant midnight=date.atStartOfDay(java.time.ZoneId.of("Asia/Jakarta")).toInstant();
+        Instant midnight=date.atStartOfDay(ZoneId.of("Asia/Jakarta")).toInstant();
         pin(date,midnight.plusSeconds(23*3600),midnight.plusSeconds(31*3600));
         pin(date.plusDays(1),midnight.plusSeconds(30*3600),midnight.plusSeconds(38*3600));
         submit(Portion.SECOND_HALF,date);
@@ -316,7 +322,7 @@ class LeaveWorkflowPostgresTest {
         assertEquals(1,balance().reserved());
     }
     @Test void touchingIntervalsAcrossDifferentDatesMayCoexist() {
-        Instant midnight=date.atStartOfDay(java.time.ZoneId.of("Asia/Jakarta")).toInstant();
+        Instant midnight=date.atStartOfDay(ZoneId.of("Asia/Jakarta")).toInstant();
         pin(date,midnight.plusSeconds(23*3600),midnight.plusSeconds(31*3600));
         pin(date.plusDays(1),midnight.plusSeconds(31*3600),midnight.plusSeconds(39*3600));
         submit(Portion.SECOND_HALF,date); submit(Portion.FIRST_HALF,date.plusDays(1));
@@ -354,7 +360,7 @@ class LeaveWorkflowPostgresTest {
         authenticate(hr);
         request=commands.act(hr,key(),request.publicId(),"REASSIGN",new Action(employee,request.version(),"Explicit fallback designation",fallback.getPublicId(),1,true));
         authenticate(manager); RequestView reassigned=request;
-        assertThrows(id.mydev.peoplecore.common.api.ResourceNotFoundException.class,()->commands.act(manager,key(),reassigned.publicId(),"APPROVE",action(reassigned.version(),null)));
+        assertThrows(ResourceNotFoundException.class,()->commands.act(manager,key(),reassigned.publicId(),"APPROVE",action(reassigned.version(),null)));
         Authentication alternate=token(fallback); authenticate(alternate);
         request=commands.act(alternate,key(),request.publicId(),"APPROVE",action(request.version(),null));
         authenticate(hr); request=commands.act(hr,key(),request.publicId(),"APPROVE",action(request.version(),null));
@@ -364,10 +370,10 @@ class LeaveWorkflowPostgresTest {
         authenticate(owner); String requestKey=key(); Draft payload=draft(Portion.FULL,date);
         RequestView request=commands.create(owner,requestKey,payload);
         assertEquals(request,commands.create(owner,requestKey,payload));
-        assertThrows(id.mydev.peoplecore.common.command.CommandConflictException.class,()->commands.create(owner,requestKey,draft(Portion.FIRST_HALF,date)));
+        assertThrows(CommandConflictException.class,()->commands.create(owner,requestKey,draft(Portion.FIRST_HALF,date)));
         UserAccount member=accounts.findByOidcIssuerAndOidcSubject(ISSUER,owner.getName()).orElseThrow();
         member.applyCutoff(Instant.now().minusSeconds(1),LocalTime.of(17,0),"Asia/Jakarta",Instant.now()); accounts.saveAndFlush(member);
-        assertThrows(org.springframework.security.access.AccessDeniedException.class,()->commands.create(owner,requestKey,payload));
+        assertThrows(AccessDeniedException.class,()->commands.create(owner,requestKey,payload));
     }
     @Test void crossYearAndMultiDatePartialDraftsAreRejected() {
         authenticate(owner);
@@ -471,18 +477,18 @@ class LeaveWorkflowPostgresTest {
     }
     @Test void runtimeCannotRewriteAggregateAndOperationalProvenanceWhileLifecycleStillWorks() {
         RequestView request=submit(Portion.FULL,date); UUID id=request.publicId();
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_request SET employee_id=?,version=version+1 WHERE public_id=?",employees.requireInternalByPublicId(managerEmployee).getId(),id));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_request SET reason='Rewritten',version=version+1 WHERE public_id=?",id));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_review_assignment SET reviewer_account_public_id=? WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?) AND step=1",hrId,id));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_occupancy SET start_at=start_at-INTERVAL '1 minute' WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",id));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_request SET employee_id=?,version=version+1 WHERE public_id=?",employees.requireInternalByPublicId(managerEmployee).getId(),id));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_request SET reason='Rewritten',version=version+1 WHERE public_id=?",id));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_review_assignment SET reviewer_account_public_id=? WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?) AND step=1",hrId,id));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_occupancy SET start_at=start_at-INTERVAL '1 minute' WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",id));
         request=approve(request); authenticate(owner);
         var cancellation=commands.createCancellation(owner,key(),id,action(request.version(),"Cancel"));
         UUID cancellationId=cancellation.publicId();
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_cancellation SET reason='Rewritten',version=version+1 WHERE public_id=?",cancellationId));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_cancellation_assignment SET reviewer_account_public_id=? WHERE cancellation_id=(SELECT id FROM leave_cancellation WHERE public_id=?)",UUID.randomUUID(),cancellationId));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_cancellation SET reason='Rewritten',version=version+1 WHERE public_id=?",cancellationId));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_cancellation_assignment SET reviewer_account_public_id=? WHERE cancellation_id=(SELECT id FROM leave_cancellation WHERE public_id=?)",UUID.randomUUID(),cancellationId));
         authenticate(hr); commands.actCancellation(hr,key(),id,cancellationId,"APPROVE",action(cancellation.version(),null));
         assertEquals("CANCELLED",workflow.get(id,owner).status()); assertEquals(0,balance().consumed());
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update("UPDATE leave_occupancy SET active=TRUE WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",id));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE leave_occupancy SET active=TRUE WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?)",id));
     }
     @Test void routingRejectsIneligibleCancellationReviewer() {
         UUID config=UUID.randomUUID();
@@ -497,23 +503,23 @@ class LeaveWorkflowPostgresTest {
     }
     @Test void runtimeCannotInsertIntoActivatedLeaveConfiguration() {
         Long config=jdbc.queryForObject("SELECT rule_set_id FROM leave_rule_current WHERE id=1",Long.class);
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "INSERT INTO leave_rule(rule_set_id,rule_id,priority,org_unit,hr_account_public_id,cancellation_account_public_id) VALUES (?,?,?,?,?,?)",
             config,"late-rule",5,"ENG",hrId,hrId));
     }
     @Test void runtimeCannotInsertSubmittedLeaveEvidenceOrReactivateReservation() {
         RequestView request=submit(Portion.FULL,date);
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "INSERT INTO leave_portion(request_id,revision,employee_id,occurrence_id,work_date,half,start_at,end_at) "
                 + "SELECT request_id,revision,employee_id,occurrence_id,work_date+1,half,start_at,end_at FROM leave_portion "
                 + "WHERE request_id=(SELECT id FROM leave_request WHERE public_id=?) LIMIT 1",request.publicId()));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "INSERT INTO leave_decision(request_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,outcome,created_at) "
                 + "SELECT id,revision,3,?,?,'APPROVE',now() FROM leave_request WHERE public_id=?",hrId,managerEmployee,request.publicId()));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "UPDATE leave_reservation SET half_units=half_units+1 WHERE request_public_id=?",request.publicId()));
         jdbc.update("UPDATE leave_reservation SET active=FALSE WHERE request_public_id=?",request.publicId());
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "UPDATE leave_reservation SET active=TRUE WHERE request_public_id=?",request.publicId()));
     }
     private void pin(LocalDate day,Instant start,Instant end) {

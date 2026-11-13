@@ -20,6 +20,8 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
+import jakarta.persistence.EntityManager;
+import java.util.Comparator;
 
 @Service
 @Transactional(readOnly = true)
@@ -31,12 +33,12 @@ public class WorkRevisionQueryService {
     private final AccountAccessService access;
     private final AdmissionGuard admission;
     private final Clock clock;
-    private final jakarta.persistence.EntityManager entities;
+    private final EntityManager entities;
 
     public WorkRevisionQueryService(WorkScheduleRevisionRepository schedules,
         HolidayCalendarRevisionRepository calendars, WorkScheduleDayRepository days,
         HolidayDateRepository holidays, AccountAccessService access, AdmissionGuard admission, Clock clock,
-        jakarta.persistence.EntityManager entities) {
+        EntityManager entities) {
         this.schedules = schedules;
         this.calendars = calendars;
         this.days = days;
@@ -83,7 +85,7 @@ public class WorkRevisionQueryService {
         begin(caller, 0, 1);
         var r = schedules.findByPublicId(id).filter(v -> v.isPublished()).orElseThrow(ResourceNotFoundException::new);
         var content = days.findByRevisionId(r.getId()).stream()
-            .sorted(java.util.Comparator.comparingInt(d -> d.getWeekday()))
+            .sorted(Comparator.comparingInt(d -> d.getWeekday()))
             .map(WorkRevisionQueryMapper::day).toList();
         authorize(caller);
         return new Schedule(r.getPublicId(), r.getTimezone(), r.getStatus(), r.getPublishedAt(), content);
@@ -93,7 +95,7 @@ public class WorkRevisionQueryService {
         begin(caller, 0, 1);
         var r = calendars.findByPublicId(id).filter(v -> v.isPublished()).orElseThrow(ResourceNotFoundException::new);
         var content = holidays.findByRevisionId(r.getId()).stream()
-            .sorted(java.util.Comparator.comparing(d -> d.getHolidayDay()))
+            .sorted(Comparator.comparing(d -> d.getHolidayDay()))
             .map(WorkRevisionQueryMapper::holiday).toList();
         authorize(caller);
         return new Calendar(r.getPublicId(), r.getLocation(), r.getStatus(), r.getPublishedAt(), content);

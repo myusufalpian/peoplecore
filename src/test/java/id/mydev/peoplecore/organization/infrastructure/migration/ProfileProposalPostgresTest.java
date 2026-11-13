@@ -10,6 +10,11 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 @Tag("postgres")
 class ProfileProposalPostgresTest {
@@ -147,7 +152,7 @@ class ProfileProposalPostgresTest {
             fixture.jdbc.update(
                 "update profile_rule_sets set status='PUBLISHED',published_at=now() where public_id=?::uuid",
                 setId);
-            assertEquals(13, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(17, fixture.flyway().migrate().migrationsExecuted);
             assertEquals(1, fixture.jdbc.queryForObject(
                 "select count(*) from profile_rules where rule_id='route-eng'", Integer.class));
             assertEquals(0, fixture.jdbc.queryForObject(
@@ -229,7 +234,7 @@ class ProfileProposalPostgresTest {
             fixture.jdbc.update(
                 "insert into profile_revision_change(revision_id,field_name,proposed_value,baseline_version) "
                     + "values(?,'personalPhone','+62 812 345 678',0)", revisionId);
-            assertEquals(12, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(16, fixture.flyway().migrate().migrationsExecuted);
             fixture.grantRuntime();
             var runtime = fixture.runtime();
             assertEquals(true, runtime.queryForObject(
@@ -264,7 +269,7 @@ class ProfileProposalPostgresTest {
                     + "values(gen_random_uuid(),?,1,now())", proposalId);
             long revisionId = runtime.queryForObject(
                 "select id from profile_revision where proposal_id=?", Long.class, proposalId);
-            var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+            var dataSource = new DriverManagerDataSource(
                 fixture.url, fixture.runtimeUsername, fixture.runtimePassword);
             java.sql.Connection sealer = dataSource.getConnection();
             sealer.setAutoCommit(false);
@@ -274,10 +279,10 @@ class ProfileProposalPostgresTest {
                     lock.setObject(1, revisionId);
                     lock.executeQuery().close();
                 }
-                java.util.concurrent.ExecutorService pool =
-                    java.util.concurrent.Executors.newSingleThreadExecutor();
+                ExecutorService pool =
+                    Executors.newSingleThreadExecutor();
                 try {
-                    java.util.concurrent.Future<?> late = pool.submit(() -> runtime.update(
+                    Future<?> late = pool.submit(() -> runtime.update(
                         "insert into profile_revision_change(revision_id,field_name,"
                             + "proposed_value,baseline_version) "
                             + "values(?,'personalEmail','a@example.id',0)", revisionId));
@@ -288,9 +293,9 @@ class ProfileProposalPostgresTest {
                         seal.executeUpdate();
                     }
                     sealer.commit();
-                    java.util.concurrent.ExecutionException failure =
+                    ExecutionException failure =
                         org.junit.jupiter.api.Assertions.assertThrows(
-                            java.util.concurrent.ExecutionException.class, late::get);
+                            ExecutionException.class, late::get);
                     assertEquals("42501", rootSqlState(failure));
                     assertEquals(0, runtime.queryForObject(
                         "select count(*) from profile_revision_change where revision_id=?",

@@ -1,7 +1,7 @@
 package id.mydev.peoplecore.document.application.service;
 
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;

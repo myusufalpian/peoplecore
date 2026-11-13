@@ -40,6 +40,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import id.mydev.peoplecore.organization.application.command.ProfileResults;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 class ProfileProposalControllerTest {
@@ -68,9 +69,9 @@ class ProfileProposalControllerTest {
             return new ProposalDetailResult(
                 new ProposalResult(PROPOSAL_ID, EMPLOYEE_ID, "PENDING", 1, REVISION_ID, 2,
                     ASSIGNMENT_ID, null),
-                List.of(new id.mydev.peoplecore.organization.application.command.ProfileResults.ChangeView(
+                List.of(new ProfileResults.ChangeView(
                     "personalPhone", null, "+62 812 345 678")),
-                new id.mydev.peoplecore.organization.application.command.ProfileResults.AssignmentView(
+                new ProfileResults.AssignmentView(
                     ASSIGNMENT_ID, UUID.randomUUID(), "ACTIVE", null, NOW, true), List.of("APPROVE"));
         }
 
@@ -86,13 +87,13 @@ class ProfileProposalControllerTest {
             return new ProposalHistoryResult(
                 new ProposalResult(PROPOSAL_ID, EMPLOYEE_ID, "PENDING", 1, REVISION_ID, 2,
                     ASSIGNMENT_ID, null),
-                List.of(new id.mydev.peoplecore.organization.application.command.ProfileResults.RevisionView(
+                List.of(new ProfileResults.RevisionView(
                     null, null, "UNKNOWN", REVISION_ID, 2, null, NOW, "ENG", "L3", null, null,
-                    List.of(new id.mydev.peoplecore.organization.application.command.ProfileResults.ChangeView(
+                    List.of(new ProfileResults.ChangeView(
                         "personalPhone", null, "+62 812 345 678")))),
-                List.of(new id.mydev.peoplecore.organization.application.command.ProfileResults.DecisionView(
+                List.of(new ProfileResults.DecisionView(
                     REVISION_ID, ASSIGNMENT_ID, "RETURN", null, "Fix format", NOW)),
-                List.of(new id.mydev.peoplecore.organization.application.command.ProfileResults.EvaluationView(
+                List.of(new ProfileResults.EvaluationView(
                     REVISION_ID, NOW, null, "ENG", "L3", "BLOCKED", null, null, "NO_MATCH")),
                 List.of(), 1, 1, 1, 0);
         }

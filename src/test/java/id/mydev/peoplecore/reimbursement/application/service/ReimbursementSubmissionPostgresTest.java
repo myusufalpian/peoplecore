@@ -1,5 +1,8 @@
 package id.mydev.peoplecore.reimbursement.application.service;
 
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementWorkflowRepository;
+import id.mydev.peoplecore.document.infrastructure.persistence.JdbcVerifiedDocumentRepository;
+
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess;
@@ -10,6 +13,7 @@ import id.mydev.peoplecore.organization.application.service.EmployeeService;
 import id.mydev.peoplecore.organization.domain.model.Employee;
 import id.mydev.peoplecore.support.PostgresFixture;
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels.Action;
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementSubmissionRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Instant;
@@ -39,6 +43,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
+import java.util.concurrent.Callable;
 
 @Tag("postgres")
 class ReimbursementSubmissionPostgresTest {
@@ -74,8 +79,8 @@ class ReimbursementSubmissionPostgresTest {
             when(access.requireActive(eq(caller), any())).thenReturn(account);
             when(access.activeRoles(eq(10L), any())).thenReturn(List.of("EMPLOYEE"));
             when(access.ownEmployeePublicId(account)).thenReturn(Optional.of(employeePublicId));
-            var service = new ReimbursementSubmissionService(fixture.jdbc, access, employees,
-                new VerifiedDocumentAccess(fixture.jdbc), Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC),
+            var service = new ReimbursementSubmissionService(new JdbcReimbursementSubmissionRepository(fixture.jdbc), access, employees,
+                new VerifiedDocumentAccess(new JdbcVerifiedDocumentRepository(fixture.jdbc)), Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC),
                 mock(EntityManager.class));
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(fixture.jdbc.getDataSource()));
 
@@ -144,7 +149,7 @@ class ReimbursementSubmissionPostgresTest {
         when(access.hasScopedRole(eq(13L), eq(HrisRole.FINANCE_PAYROLL), eq("HQ"), any())).thenReturn(true);
         doThrow(new ResourceNotFoundException()).when(access).requireEmployeeRead(eq(manager), eq(employeeId), eq("HQ"), any());
         Clock clock = Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC);
-        var workflow = new ReimbursementWorkflowService(fixture.jdbc, employees, access, submissions,
+        var workflow = new ReimbursementWorkflowService(new JdbcReimbursementWorkflowRepository(fixture.jdbc), employees, access, submissions,
             mock(ReimbursementCategoryService.class), mock(EntityManager.class), mock(AdmissionGuard.class), clock);
 
         verifyRouteRetry(fixture, employeeId, claim, ownerCaller, hrCaller, manager, managerEmployee,
@@ -362,7 +367,7 @@ class ReimbursementSubmissionPostgresTest {
                                     UUID employeeId, UUID claim, Authentication caller, LocalDate paid) throws Exception {
         CountDownLatch start = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {
-            java.util.concurrent.Callable<Boolean> payment = () -> {
+            Callable<Boolean> payment = () -> {
                 start.await();
                 try {
                     transactions.executeWithoutResult(status -> workflow.act(claim, "RECORD_PAYMENT",
@@ -383,7 +388,7 @@ class ReimbursementSubmissionPostgresTest {
                                         UUID employeeId, UUID claim, Authentication caller, LocalDate paid) throws Exception {
         CountDownLatch start = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {
-            java.util.concurrent.Callable<Boolean> correction = () -> {
+            Callable<Boolean> correction = () -> {
                 start.await();
                 try {
                     transactions.executeWithoutResult(status -> workflow.act(claim, "CORRECT_PAYMENT",

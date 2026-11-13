@@ -46,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.organization.domain.exception.UnknownOrgUnitException;
 
 @SpringBootTest(properties = {
     "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -336,7 +337,7 @@ class ApprovalRuleServiceTest {
             () -> rules.publishRuleSet(UUID.randomUUID(), nullElement, hrCaller));
         assertThrows(RulePublishException.class, () -> rules.publishRuleSet(UUID.randomUUID(),
             List.of(payload("x".repeat(65), 1, "ENG", reviewerAccountId)), hrCaller));
-        assertThrows(id.mydev.peoplecore.organization.domain.exception.UnknownOrgUnitException.class,
+        assertThrows(UnknownOrgUnitException.class,
             () -> rules.publishRuleSet(UUID.randomUUID(),
                 List.of(payload("nope-rule", 1, "NOPE", reviewerAccountId)), hrCaller));
         RuleSetResult wildcard = rules.publishRuleSet(UUID.randomUUID(),

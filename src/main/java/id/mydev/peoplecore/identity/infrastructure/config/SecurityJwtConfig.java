@@ -17,15 +17,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 import id.mydev.peoplecore.identity.infrastructure.properties.JwtSecurityProperties;
+import org.springframework.util.Assert;
 @Configuration
 public class SecurityJwtConfig {
 
     @Bean
     @ConditionalOnProperty("peoplecore.security.jwt.jwks-uri")
     JwtDecoder jwtDecoder(JwtSecurityProperties properties) {
-        org.springframework.util.Assert.hasText(properties.issuerUri(),
+        Assert.hasText(properties.issuerUri(),
             "peoplecore.security.jwt.issuer-uri is required when JWT security is enabled");
-        org.springframework.util.Assert.hasText(properties.audience(),
+        Assert.hasText(properties.audience(),
             "peoplecore.security.jwt.audience is required when JWT security is enabled");
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(properties.jwksUri()).build();
         decoder.setJwtValidator(validators(properties.issuerUri(), properties.audience()));
@@ -33,8 +34,8 @@ public class SecurityJwtConfig {
     }
 
     public static OAuth2TokenValidator<Jwt> validators(String issuerUri, String audience) {
-        org.springframework.util.Assert.hasText(issuerUri, "issuerUri must not be blank");
-        org.springframework.util.Assert.hasText(audience, "audience must not be blank");
+        Assert.hasText(issuerUri, "issuerUri must not be blank");
+        Assert.hasText(audience, "audience must not be blank");
         List<OAuth2TokenValidator<Jwt>> checks = new ArrayList<>();
         checks.add(JwtValidators.createDefaultWithIssuer(issuerUri));
         checks.add(new JwtClaimValidator<Instant>(JwtClaimNames.EXP,

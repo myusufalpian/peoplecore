@@ -10,6 +10,11 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 @Tag("postgres")
 class ProfileApprovalRulesPostgresTest {
@@ -125,7 +130,7 @@ class ProfileApprovalRulesPostgresTest {
                 "insert into profile_rule_sets(public_id,request_type,status,created_at) "
                     + "values(?,'PROFILE_CHANGE','DRAFT',now())",
                 setId);
-            var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+            var dataSource = new DriverManagerDataSource(
                 fixture.url, fixture.username, fixture.password);
             java.sql.Connection publisher = dataSource.getConnection();
             publisher.setAutoCommit(false);
@@ -135,10 +140,10 @@ class ProfileApprovalRulesPostgresTest {
                     lock.setObject(1, setId);
                     lock.executeQuery().close();
                 }
-                java.util.concurrent.ExecutorService pool =
-                    java.util.concurrent.Executors.newSingleThreadExecutor();
+                ExecutorService pool =
+                    Executors.newSingleThreadExecutor();
                 try {
-                    java.util.concurrent.Future<?> child = pool.submit(() -> fixture.jdbc.update(
+                    Future<?> child = pool.submit(() -> fixture.jdbc.update(
                         "insert into profile_rules(rule_set_id,rule_id,priority,"
                             + "reviewer_account_public_id,created_at) "
                             + "select id,'route-late',99,?::uuid,now() from profile_rule_sets "
@@ -152,9 +157,9 @@ class ProfileApprovalRulesPostgresTest {
                         publish.executeUpdate();
                     }
                     publisher.commit();
-                    java.util.concurrent.ExecutionException failure =
+                    ExecutionException failure =
                         org.junit.jupiter.api.Assertions.assertThrows(
-                            java.util.concurrent.ExecutionException.class, child::get);
+                            ExecutionException.class, child::get);
                     org.junit.jupiter.api.Assertions.assertTrue(
                         String.valueOf(failure.getCause()).contains("immutable"));
                     assertEquals(0, fixture.jdbc.queryForObject(
@@ -175,7 +180,7 @@ class ProfileApprovalRulesPostgresTest {
                 .schemas(fixture.schema).target("9").load().migrate();
             fixture.jdbc.update(
                 "insert into employees(public_id,employee_number,created_at) values(gen_random_uuid(),'PRE-RULES',now())");
-            assertEquals(14, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(18, fixture.flyway().migrate().migrationsExecuted);
             assertEquals(1, fixture.jdbc.queryForObject(
                 "select count(*) from employees where employee_number='PRE-RULES'", Integer.class));
 

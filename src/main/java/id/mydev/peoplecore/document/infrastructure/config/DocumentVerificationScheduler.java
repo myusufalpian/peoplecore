@@ -1,6 +1,7 @@
 package id.mydev.peoplecore.document.infrastructure.config;
 
 import id.mydev.peoplecore.document.application.service.DocumentVerificationWorker;
+import id.mydev.peoplecore.document.domain.exception.DocumentVerificationException;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Objects;
@@ -31,7 +32,7 @@ public final class DocumentVerificationScheduler {
         try {
             worker.recoverNext(retryDelay);
             worker.verifyNext();
-        } catch (IOException | DataAccessException | SdkException | IllegalStateException exception) {
+        } catch (IOException | DataAccessException | SdkException | IllegalStateException | DocumentVerificationException exception) {
             LOG.warn("Document verification is temporarily unavailable");
         }
     }

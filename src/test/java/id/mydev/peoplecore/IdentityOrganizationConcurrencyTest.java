@@ -56,6 +56,11 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.common.api.ResourceNotFoundException;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Tag("postgres")
 @SpringBootTest(properties = {
@@ -93,7 +98,7 @@ class IdentityOrganizationConcurrencyTest {
     @Autowired RoleAssignmentRepository roleRepository;
     @Autowired EnrollmentInvitationRepository invitationRepository;
     @Autowired PlatformTransactionManager transactions;
-    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired JdbcTemplate jdbc;
 
     private Authentication hrCaller;
 
@@ -228,7 +233,7 @@ class IdentityOrganizationConcurrencyTest {
             for (Future<?> future : List.of(first, second)) {
                 try {
                     future.get(30, TimeUnit.SECONDS);
-                } catch (java.util.concurrent.ExecutionException ex) {
+                } catch (ExecutionException ex) {
                     if (ex.getCause() instanceof AssignmentOverlapException) {
                         conflicts++;
                     } else {
@@ -290,7 +295,7 @@ class IdentityOrganizationConcurrencyTest {
             try {
                 worker.get(30, TimeUnit.SECONDS);
                 throw new AssertionError("Worker mutation should have been denied");
-            } catch (java.util.concurrent.ExecutionException ex) {
+            } catch (ExecutionException ex) {
                 assertTrue(ex.getCause() instanceof RuntimeException
                     && ex.getCause().getCause() instanceof AccessDeniedException);
             }
@@ -327,7 +332,7 @@ class IdentityOrganizationConcurrencyTest {
                 try {
                     future.get(30, TimeUnit.SECONDS);
                     bound++;
-                } catch (java.util.concurrent.ExecutionException ex) {
+                } catch (ExecutionException ex) {
                     rejected++;
                 }
             }
@@ -566,7 +571,7 @@ class IdentityOrganizationConcurrencyTest {
             try {
                 replay.get(30, TimeUnit.SECONDS);
                 throw new AssertionError("Replay after revocation should have been denied");
-            } catch (java.util.concurrent.ExecutionException ex) {
+            } catch (ExecutionException ex) {
                 assertTrue(ex.getCause() instanceof AccessDeniedException);
             }
             assertEquals(storedHash, jdbc.queryForObject(
@@ -578,7 +583,7 @@ class IdentityOrganizationConcurrencyTest {
             assertEquals(outboxBefore, jdbc.queryForObject(
                 "select count(*) from outbox_events where aggregate_public_id = ?", Long.class, employeeId));
             assertEquals("EMP-W1", employees.requireInternalByPublicId(employeeId).getEmployeeNumber());
-            assertThrows(id.mydev.peoplecore.common.api.ResourceNotFoundException.class,
+            assertThrows(ResourceNotFoundException.class,
                 () -> employees.get(employeeId, hrCaller));
         } finally {
             pool.shutdownNow();
@@ -793,7 +798,7 @@ class IdentityOrganizationConcurrencyTest {
             try {
                 worker.get(30, TimeUnit.SECONDS);
                 throw new AssertionError("Revoked invitation should not activate");
-            } catch (java.util.concurrent.ExecutionException ex) {
+            } catch (ExecutionException ex) {
                 assertNoDeadlock(ex);
                 assertTrue(ex.getCause() instanceof InvitationConflictException);
             }
@@ -835,7 +840,7 @@ class IdentityOrganizationConcurrencyTest {
         }
     }
 
-    private static <T> T as(Authentication caller, java.util.function.Supplier<T> action) {        Authentication previous = SecurityContextHolder.getContext().getAuthentication();
+    private static <T> T as(Authentication caller, Supplier<T> action) {        Authentication previous = SecurityContextHolder.getContext().getAuthentication();
         SecurityContextHolder.getContext().setAuthentication(caller);
         try {
             return action.get();
@@ -845,7 +850,7 @@ class IdentityOrganizationConcurrencyTest {
     }
 
     private static <T> T guarded(CountDownLatch ready, CountDownLatch go, Authentication caller,
-                                java.util.concurrent.Callable<T> action) throws Exception {        ready.countDown();
+                                Callable<T> action) throws Exception {        ready.countDown();
         if (!go.await(10, TimeUnit.SECONDS)) {
             throw new IllegalStateException("Racers did not start together");
         }

@@ -2,6 +2,7 @@ package id.mydev.peoplecore.payslip;
 
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
+import id.mydev.peoplecore.common.outbox.OutboxEventRepository;
 import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
@@ -14,6 +15,8 @@ import id.mydev.peoplecore.payslip.application.PayslipModels.Mutation;
 import id.mydev.peoplecore.payslip.application.PayslipModels.Published;
 import id.mydev.peoplecore.payslip.application.PayslipModels.PublishedVersion;
 import id.mydev.peoplecore.payslip.application.PayslipService;
+import id.mydev.peoplecore.payslip.domain.repository.PayslipRepository;
+import id.mydev.peoplecore.payslip.infrastructure.persistence.JdbcPayslipRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Instant;
@@ -42,6 +45,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import java.util.Collections;
 
 class PayslipServiceTest {
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
@@ -50,8 +54,8 @@ class PayslipServiceTest {
     private final VerifiedDocumentAccess documents = mock(VerifiedDocumentAccess.class);
     private final ObjectMapper mapper = mock(ObjectMapper.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC);
-    private final PayslipService service = new PayslipService(jdbc, employees, access, documents, clock, mapper,
-        mock(EntityManager.class), mock(AdmissionGuard.class));
+    private final PayslipService service = new PayslipService(new JdbcPayslipRepository(jdbc), employees, access, documents, clock, mapper,
+        mock(EntityManager.class), mock(AdmissionGuard.class), mock(OutboxEventRepository.class));
 
     @Test
     void rejectsDuplicateAndInvalidMappingsBeforePersistence() {
@@ -67,7 +71,7 @@ class PayslipServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service.create(UUID.randomUUID(), null, caller));
         assertThrows(IllegalArgumentException.class, () -> service.create(UUID.randomUUID(), new Draft(null), caller));
         assertThrows(IllegalArgumentException.class, () -> service.create(UUID.randomUUID(),
-            new Draft(java.util.Collections.singletonList(null)), caller));
+            new Draft(Collections.singletonList(null)), caller));
         assertThrows(IllegalArgumentException.class, () -> service.create(UUID.randomUUID(),
             new Draft(List.of(new Item(null, item.period(), item.documentPublicId()))), caller));
         assertThrows(IllegalArgumentException.class, () -> service.create(UUID.randomUUID(),
@@ -226,7 +230,7 @@ class PayslipServiceTest {
         when(access.activeRoles(10L, clock.instant())).thenReturn(List.of("EMPLOYEE"));
         when(employees.requireInternalByPublicId(employeeId)).thenReturn(employee);
         when(employees.currentOrgUnit(20L, clock.instant())).thenReturn(Optional.of("unit"));
-        doReturn(List.of(new Published(UUID.randomUUID(), YearMonth.of(2026, 11))))
+        doReturn(List.of(new PayslipRepository.PublishedRecord(UUID.randomUUID(), YearMonth.of(2026, 11))))
             .when(jdbc).query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Published>>any(),
                 any(), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(), any());
 
@@ -245,17 +249,17 @@ class PayslipServiceTest {
         when(access.ownEmployeePublicId(actor)).thenReturn(Optional.of(employeeId));
         when(access.activeRoles(10L, clock.instant())).thenReturn(List.of("EMPLOYEE"));
         when(employees.requireInternalByPublicId(employeeId)).thenReturn(employee);
-        Published first = new Published(UUID.randomUUID(), YearMonth.of(2026, 11));
-        Published second = new Published(UUID.randomUUID(), YearMonth.of(2026, 10));
+        PayslipRepository.PublishedRecord first = new PayslipRepository.PublishedRecord(UUID.randomUUID(), YearMonth.of(2026, 11));
+        PayslipRepository.PublishedRecord second = new PayslipRepository.PublishedRecord(UUID.randomUUID(), YearMonth.of(2026, 10));
         doReturn(List.of(first, second), List.of(second))
             .when(jdbc).query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Published>>any(),
                 any(), any(), any(), any());
 
         var page = service.published(caller, 1, null);
-        assertEquals(List.of(first), page.items());
+        assertEquals(List.of(new Published(first.publicId(), first.period())), page.items());
         assertEquals(first.publicId(), page.nextCursor());
         var last = service.published(caller, 1, page.nextCursor());
-        assertEquals(List.of(second), last.items());
+        assertEquals(List.of(new Published(second.publicId(), second.period())), last.items());
         assertEquals(null, last.nextCursor());
     }
 
@@ -311,7 +315,7 @@ class PayslipServiceTest {
         when(access.activeRoles(10L, clock.instant())).thenReturn(List.of("EMPLOYEE"));
         when(employees.requireInternalByPublicId(firstId)).thenReturn(employee);
         when(employees.requireInternalByPublicId(secondId)).thenReturn(employee);
-        doReturn(List.of(new PublishedVersion(firstId, UUID.randomUUID(), UUID.randomUUID())))
+        doReturn(List.of(new PayslipRepository.VersionRecord(UUID.randomUUID(), UUID.randomUUID())))
             .when(jdbc).query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<PublishedVersion>>any(),
                 org.mockito.ArgumentMatchers.eq(publicationId), org.mockito.ArgumentMatchers.eq(firstId));
 

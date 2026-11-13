@@ -1,7 +1,9 @@
 package id.mydev.peoplecore.document.application.service;
 
+import id.mydev.peoplecore.document.infrastructure.persistence.JdbcVerifiedDocumentRepository;
+
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Request;
 import id.mydev.peoplecore.support.PostgresFixture;
 import java.util.List;
@@ -29,7 +31,7 @@ class VerifiedDocumentAccessPostgresTest {
             employee(jdbc, stranger);
             UUID first = verifiedDocument(jdbc, employee);
             UUID second = verifiedDocument(jdbc, employee);
-            var service = new VerifiedDocumentAccess(jdbc);
+            var service = new VerifiedDocumentAccess(new JdbcVerifiedDocumentRepository(jdbc));
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
 
             var versions = transactions.execute(status -> service.requireAllForUpdate(List.of(
@@ -40,7 +42,7 @@ class VerifiedDocumentAccessPostgresTest {
                 service.requireForUpdate(first, stranger, Purpose.CLAIM_EVIDENCE)));
             assertThrows(ResourceNotFoundException.class, () -> transactions.execute(status ->
                 service.requireForUpdate(first, owner, Purpose.PAYSLIP)));
-            jdbc.update("UPDATE private_document SET deletion_state='CLAIMED' WHERE public_id=?", first);
+            jdbc.update("UPDATE private_document SET deletion_state='CLAIMED',deletion_requested_at=now(),deletion_restore_deadline=now()+interval '30 days' WHERE public_id=?", first);
             assertThrows(ResourceNotFoundException.class, () -> transactions.execute(status ->
                 service.requireForUpdate(first, owner, Purpose.CLAIM_EVIDENCE)));
         }

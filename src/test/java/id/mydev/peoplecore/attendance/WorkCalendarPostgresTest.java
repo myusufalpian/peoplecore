@@ -60,6 +60,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import id.mydev.peoplecore.common.command.CommandIds;
+import java.util.concurrent.Callable;
+import java.util.function.Supplier;
+import org.springframework.dao.DataAccessException;
 
 @Tag("postgres")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK, properties = {
@@ -243,7 +247,7 @@ class WorkCalendarPostgresTest {
                     "public_id=gen_random_uuid()", "to_date=from_date+1", "supersedes_public_id=gen_random_uuid()",
                     "created_at=created_at+interval '1 second'", "backdate_reason='rewritten'",
                     "superseded=true,revision_id=revision_id+1")) {
-                    var denied = org.junit.jupiter.api.Assertions.assertThrows(org.springframework.dao.DataAccessException.class,
+                    var denied = org.junit.jupiter.api.Assertions.assertThrows(DataAccessException.class,
                         () -> jdbc.update("update " + table + " set " + mutation + " where public_id=?", target));
                     assertTrue(isAccessDenied(denied));
                 }
@@ -251,7 +255,7 @@ class WorkCalendarPostgresTest {
             AssignmentResult revised = calendars.assignSchedule(assignPayload(employeePublicId, scheduleId,
                 LocalDate.now().plusDays(5), null, assignment.publicId(), "revise", null), scopedHr);
             assertNotNull(revised.publicId());
-            var denied = org.junit.jupiter.api.Assertions.assertThrows(org.springframework.dao.DataAccessException.class,
+            var denied = org.junit.jupiter.api.Assertions.assertThrows(DataAccessException.class,
                 () -> jdbc.update("update employee_schedule_assignment set superseded=false where public_id=?", assignment.publicId()));
             assertTrue(isAccessDenied(denied));
 
@@ -292,7 +296,7 @@ class WorkCalendarPostgresTest {
     @Test
     void failingOutboxRollsBackPublishedContextReceiptAndAudit() {
         String key = "publish-rollback-" + UUID.randomUUID();
-        UUID expectedId = id.mydev.peoplecore.common.command.CommandIds.derive("SCHEDULE_PUBLISH", hr.getName(), key);
+        UUID expectedId = CommandIds.derive("SCHEDULE_PUBLISH", hr.getName(), key);
         DATABASE.jdbc.execute("create function fail_context_outbox() returns trigger language plpgsql as $$ begin "
             + "if NEW.aggregate_public_id = '" + expectedId + "'::uuid then raise exception 'Injected outbox failure'; end if; return NEW; end $$");
         DATABASE.jdbc.execute("create trigger fail_context_outbox before insert on outbox_events "
@@ -373,7 +377,7 @@ class WorkCalendarPostgresTest {
         }
     }
 
-    private static <T> T as(Authentication caller, java.util.function.Supplier<T> action) {
+    private static <T> T as(Authentication caller, Supplier<T> action) {
         SecurityContextHolder.getContext().setAuthentication(caller);
         try {
             return action.get();
@@ -569,8 +573,8 @@ class WorkCalendarPostgresTest {
         });
     }
 
-    private Throwable runWhileAdmissionHeld(java.util.concurrent.Callable<Void> whileWaiting,
-                                            java.util.concurrent.Callable<?> waitingCall) throws Exception {
+    private Throwable runWhileAdmissionHeld(Callable<Void> whileWaiting,
+                                            Callable<?> waitingCall) throws Exception {
         long key = admissionKey();
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -682,7 +686,7 @@ class WorkCalendarPostgresTest {
         }
     }
 
-    private <T> T inNewTransaction(java.util.function.Supplier<T> action) {
+    private <T> T inNewTransaction(Supplier<T> action) {
         TransactionTemplate template = new TransactionTemplate(transactions);
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         return template.execute(status -> action.get());

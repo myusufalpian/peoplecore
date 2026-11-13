@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.organization.application.mapper.EmployeeResultMapper;
 
 class IdentityOrganizationDomainTest {
 
@@ -205,7 +206,7 @@ class IdentityOrganizationDomainTest {
         EmployeeAssignment assignment = new EmployeeAssignment(
             UUID.fromString("77777777-7777-7777-7777-777777777777"), 1L, "ENG", 9L, "L3",
             Instant.parse("2026-01-01T00:00:00Z"), null, NOW);
-        var assignmentResult = id.mydev.peoplecore.organization.application.mapper.EmployeeResultMapper
+        var assignmentResult = EmployeeResultMapper
             .result(assignment, employee.getPublicId(), null, null, null);
         var assignmentResponse = EmployeeDtoMapper.response(assignmentResult);
         assertEquals(UUID.fromString("77777777-7777-7777-7777-777777777777"), assignmentResponse.id());
@@ -249,13 +250,13 @@ class IdentityOrganizationDomainTest {
         assertThrows(IllegalArgumentException.class,
             () -> SecurityJwtConfig.validators("https://idp.example", "  "));
         var validators = SecurityJwtConfig.validators("https://idp.example", "hris-api");
-        org.springframework.security.oauth2.jwt.Jwt missingAud = org.springframework.security.oauth2.jwt.Jwt
+        Jwt missingAud = Jwt
             .withTokenValue("token").header("alg", "none").issuer("https://idp.example").subject("user-1")
             .issuedAt(NOW).expiresAt(NOW.plusSeconds(300)).build();
         assertTrue(validators.validate(missingAud).hasErrors());
-        org.springframework.security.oauth2.jwt.Jwt missingExp = org.springframework.security.oauth2.jwt.Jwt
+        Jwt missingExp = Jwt
             .withTokenValue("token").header("alg", "none").issuer("https://idp.example").subject("user-1")
-            .issuedAt(NOW).claim("aud", java.util.List.of("hris-api")).build();
+            .issuedAt(NOW).claim("aud", List.of("hris-api")).build();
         assertTrue(validators.validate(missingExp).hasErrors());
     }
 }

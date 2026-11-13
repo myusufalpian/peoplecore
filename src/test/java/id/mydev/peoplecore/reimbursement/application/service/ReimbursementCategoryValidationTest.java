@@ -3,6 +3,7 @@ package id.mydev.peoplecore.reimbursement.application.service;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.reimbursement.application.service.ReimbursementCategoryService.Category;
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementCategoryRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -20,7 +21,7 @@ class ReimbursementCategoryValidationTest {
     void rejectsInvalidPolicyIntervalsAndLimitsBeforePersistence() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         AccountAccessService access = mock(AccountAccessService.class);
-        var service = new ReimbursementCategoryService(jdbc, access, Clock.systemUTC(),
+        var service = new ReimbursementCategoryService(new JdbcReimbursementCategoryRepository(jdbc), access, Clock.systemUTC(),
             mock(AdmissionGuard.class), mock(EntityManager.class));
         Authentication caller = mock(Authentication.class);
         LocalDate date = LocalDate.of(2026, 11, 1);
@@ -36,7 +37,8 @@ class ReimbursementCategoryValidationTest {
     @Test
     void rejectsUnboundedOrUndatedCategoryQueriesBeforeDatabaseAccess() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        var service = new ReimbursementCategoryService(jdbc, mock(AccountAccessService.class), Clock.systemUTC(),
+        var service = new ReimbursementCategoryService(new JdbcReimbursementCategoryRepository(jdbc),
+            mock(AccountAccessService.class), Clock.systemUTC(),
             mock(AdmissionGuard.class), mock(EntityManager.class));
         Authentication caller = mock(Authentication.class);
         LocalDate date = LocalDate.of(2026, 11, 1);

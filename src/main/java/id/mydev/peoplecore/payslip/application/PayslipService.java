@@ -2,8 +2,10 @@ package id.mydev.peoplecore.payslip.application;
 
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
+import id.mydev.peoplecore.common.outbox.OutboxEvent;
+import id.mydev.peoplecore.common.outbox.OutboxEventRepository;
 import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
@@ -17,11 +19,12 @@ import id.mydev.peoplecore.payslip.application.PayslipModels.Result;
 import id.mydev.peoplecore.payslip.application.PayslipModels.Page;
 import id.mydev.peoplecore.payslip.application.PayslipModels.Published;
 import id.mydev.peoplecore.payslip.application.PayslipModels.PublishedVersion;
+import id.mydev.peoplecore.payslip.domain.repository.PayslipRepository;
+import id.mydev.peoplecore.payslip.domain.repository.PayslipRepository.SnapshotRecord;
 import jakarta.persistence.EntityManager;
-import java.sql.Date;
+import java.time.LocalDate;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.YearMonth;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -29,8 +32,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -41,7 +44,10 @@ import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class PayslipService {
-    private final JdbcTemplate jdbc;
+    private static final String PAYSLIP_PUBLISHED_EVENT = "PAYSLIP_PUBLISHED";
+    private static final String PAYSLIP_PUBLICATION_AGGREGATE = "PAYSLIP_PUBLICATION";
+    private static final int EVENT_SCHEMA_VERSION = 1;
+    private final PayslipRepository payslips;
     private final EmployeeService employees;
     private final AccountAccessService access;
     private final VerifiedDocumentAccess documents;
@@ -49,11 +55,12 @@ public class PayslipService {
     private final ObjectMapper mapper;
     private final EntityManager entities;
     private final AdmissionGuard admission;
+    private final OutboxEventRepository outbox;
 
-    public PayslipService(JdbcTemplate jdbc, EmployeeService employees, AccountAccessService access,
+    public PayslipService(PayslipRepository payslips, EmployeeService employees, AccountAccessService access,
                           VerifiedDocumentAccess documents, Clock clock, ObjectMapper mapper, EntityManager entities,
-                          AdmissionGuard admission) {
-        this.jdbc = jdbc;
+                          AdmissionGuard admission, OutboxEventRepository outbox) {
+        this.payslips = payslips;
         this.employees = employees;
         this.access = access;
         this.documents = documents;
@@ -61,6 +68,7 @@ public class PayslipService {
         this.mapper = mapper;
         this.entities = entities;
         this.admission = admission;
+        this.outbox = outbox;
     }
 
     public void verifyCommand(String type, JsonNode payload, Authentication caller) {
@@ -89,10 +97,9 @@ public class PayslipService {
         List<VerifiedDocumentAccess.VerifiedVersion> versions = lockDocuments(items);
         authorize(caller, items);
         UserAccount actor = access.requireActive(caller, clock.instant());
-        long batch = jdbc.queryForObject("insert into payslip_batch(public_id,created_by,created_at,updated_at) "
-            + "values(?,?,now(),now()) returning id", Long.class, publicId, actor.getId());
+        long batch = payslips.insertBatch(publicId, actor.getId());
         long revision = insertRevision(batch, 1, items, targets, versions);
-        jdbc.update("update payslip_batch set current_revision_id=? where id=?", revision, batch);
+        payslips.setCurrentRevision(batch, revision);
         authorize(caller, items);
         return new Result(publicId, "DRAFT", 1);
     }
@@ -110,7 +117,7 @@ public class PayslipService {
         List<VerifiedDocumentAccess.VerifiedVersion> versions = lockDocuments(proposed);
         authorize(caller, concat(current.items(), proposed));
         long revision = insertRevision(current.batchId(), expected + 1, proposed, targets, versions);
-        jdbc.update("update payslip_batch set current_revision_id=?,status='DRAFT',updated_at=now() where id=?", revision, current.batchId());
+        payslips.setCurrentRevisionDraft(current.batchId(), revision);
         authorize(caller, concat(current.items(), proposed));
         return new Result(publicId, "DRAFT", expected + 1);
     }
@@ -123,8 +130,8 @@ public class PayslipService {
         requireVersions(current);
         UserAccount actor = access.requireActive(caller, clock.instant());
         authorize(caller, current.items());
-        jdbc.update("update payslip_batch_revision set status='REVIEWED',reviewed_by=?,reviewed_at=now() where id=?", actor.getId(), current.revisionId());
-        jdbc.update("update payslip_batch set status='REVIEWED',updated_at=now() where id=?", current.batchId());
+        payslips.reviewRevision(current.revisionId(), actor.getId());
+        payslips.markReviewed(current.batchId());
         authorize(caller, current.items());
         return new Result(publicId, "REVIEWED", current.revision());
     }
@@ -137,18 +144,21 @@ public class PayslipService {
         requireVersions(current);
         UserAccount actor = access.requireActive(caller, clock.instant());
         authorize(caller, current.items());
-        List<PublicationItem> rows = jdbc.query("select i.id,i.employee_id,i.period_start from payslip_batch_item i "
-            + "where i.revision_id=? order by i.employee_id,i.period_start", (row, index) ->
-            new PublicationItem(row.getLong(1), row.getLong(2), row.getDate(3)), current.revisionId());
+        List<PublicationItem> rows = payslips.findPublicationItems(current.revisionId()).stream()
+            .map(record -> new PublicationItem(record.id(), record.employeeId(),
+                record.periodStart(), record.employeePublicId()))
+            .toList();
         for (PublicationItem item : rows) {
-            long publication = jdbc.queryForObject("insert into payslip_publication(public_id,revision_id,item_id,employee_id,period_start,published_by,published_at) "
-                + "values(gen_random_uuid(),?,?,?,?,?,now()) returning id", Long.class,
-                current.revisionId(), item.id(), item.employeeId(), item.period(), actor.getId());
-            jdbc.update("insert into payslip_current(employee_id,period_start,publication_id) values(?,?,?) "
-                + "on conflict(employee_id,period_start) do update set publication_id=excluded.publication_id",
-                item.employeeId(), item.period(), publication);
+            UUID publicationPublicId = UUID.randomUUID();
+            long publication = payslips.insertPublication(publicationPublicId, current.revisionId(), item.id(),
+                item.employeeId(), item.period(), actor.getId());
+            payslips.upsertCurrent(item.employeeId(), item.period(), publication);
+            outbox.save(new OutboxEvent(UUID.randomUUID(), PAYSLIP_PUBLISHED_EVENT, EVENT_SCHEMA_VERSION,
+                PAYSLIP_PUBLICATION_AGGREGATE, publication, publicationPublicId,
+                mapper.writeValueAsString(new PublicationIntent(item.employeePublicId().toString(),
+                    item.period().toString())), Instant.now(clock)));
         }
-        jdbc.update("update payslip_batch set status='PUBLISHED',updated_at=now() where id=?", current.batchId());
+        payslips.markPublished(current.batchId());
         authorize(caller, current.items());
         return new Result(publicId, "PUBLISHED", current.revision());
     }
@@ -173,15 +183,9 @@ public class PayslipService {
         entities.flush();
         entities.clear();
         UUID employeeId = requireOwnEmployee(caller);
-        List<Published> rows = jdbc.query("select p.public_id,p.period_start from payslip_current c "
-                + "join employees e on e.id=c.employee_id join payslip_publication p on p.id=c.publication_id "
-                + "join payslip_batch_revision r on r.id=p.revision_id join payslip_batch b on b.id=r.batch_id "
-                + "join payslip_batch_item i on i.id=p.item_id join private_document d on d.id=i.document_id "
-                + "where e.public_id=? and b.status='PUBLISHED' and d.employee_id=e.id and d.purpose='PAYSLIP' "
-                + "and d.deletion_state='LIVE' "
-                + "and (?::uuid is null or p.public_id < ?::uuid) order by p.public_id desc limit ?",
-            (row, index) -> new Published(row.getObject(1, UUID.class), YearMonth.from(row.getDate(2).toLocalDate())),
-            employeeId, cursor, cursor, limit + 1);
+        List<Published> rows = payslips.findPublished(employeeId, cursor, limit + 1).stream()
+            .map(record -> new Published(record.publicId(), record.period()))
+            .toList();
         if (!employeeId.equals(requireOwnEmployee(caller))) throw new ResourceNotFoundException();
         boolean hasMore = rows.size() > limit;
         List<Published> page = List.copyOf(hasMore ? rows.subList(0, limit) : rows);
@@ -195,16 +199,9 @@ public class PayslipService {
         entities.flush();
         entities.clear();
         UUID employeeId = requireOwnEmployee(caller);
-        List<PublishedVersion> versions = jdbc.query("select d.public_id,v.public_id from payslip_current c "
-                + "join employees e on e.id=c.employee_id join payslip_publication p on p.id=c.publication_id "
-                + "join payslip_batch_revision r on r.id=p.revision_id join payslip_batch b on b.id=r.batch_id "
-                + "join payslip_batch_item i on i.id=p.item_id join private_document d on d.id=i.document_id "
-                + "join document_version v on v.id=i.document_version_id and v.document_id=d.id "
-                + "where p.public_id=? and e.public_id=? and b.status='PUBLISHED' and d.employee_id=e.id "
-                + "and d.purpose='PAYSLIP' and d.deletion_state='LIVE' and v.media_type='application/pdf'",
-            (row, index) -> new PublishedVersion(employeeId, row.getObject(1, UUID.class), row.getObject(2, UUID.class)),
-            publicationId, employeeId);
-        PublishedVersion version = versions.stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+        PublishedVersion version = payslips.findPublishedVersion(publicationId, employeeId)
+            .map(record -> new PublishedVersion(employeeId, record.documentPublicId(), record.versionPublicId()))
+            .orElseThrow(ResourceNotFoundException::new);
         if (!employeeId.equals(requireOwnEmployee(caller))) throw new ResourceNotFoundException();
         return version;
     }
@@ -237,9 +234,8 @@ public class PayslipService {
         Map<UUID, Long> ids = versions.stream().collect(Collectors.toMap(VerifiedDocumentAccess.VerifiedVersion::documentPublicId,
             VerifiedDocumentAccess.VerifiedVersion::versionId, (first, second) -> first));
         for (Item item : current.items()) {
-            Long expected = jdbc.queryForObject("select i.document_version_id from payslip_batch_item i join private_document d on d.id=i.document_id "
-                + "where i.revision_id=? and d.public_id=? and i.period_start=?", Long.class,
-                current.revisionId(), item.documentPublicId(), item.period().atDay(1));
+            Long expected = payslips.findItemVersion(current.revisionId(), item.documentPublicId(),
+                item.period().atDay(1));
             if (!expected.equals(ids.get(item.documentPublicId()))) throw conflict();
         }
     }
@@ -264,8 +260,7 @@ public class PayslipService {
 
     private void lockEmployees(List<Employee> targets) {
         for (Employee employee : targets) {
-            jdbc.update("insert into document_account(employee_id,created_at) values(?,now()) on conflict(employee_id) do nothing", employee.getId());
-            jdbc.queryForObject("select id from document_account where employee_id=? for update", Long.class, employee.getId());
+            payslips.lockAccount(employee.getId());
         }
         entities.flush();
         entities.clear();
@@ -290,30 +285,23 @@ public class PayslipService {
 
     private long insertRevision(long batch, long number, List<Item> items, List<Employee> targets,
                                 List<VerifiedDocumentAccess.VerifiedVersion> versions) {
-        long revision = jdbc.queryForObject("insert into payslip_batch_revision(public_id,batch_id,revision_number,created_at) "
-            + "values(gen_random_uuid(),?,?,now()) returning id", Long.class, batch, number);
+        long revision = payslips.insertRevision(batch, number);
         Map<UUID, Employee> employeeMap = targets.stream().collect(Collectors.toMap(Employee::getPublicId, Function.identity()));
         Map<UUID, VerifiedDocumentAccess.VerifiedVersion> documentMap = versions.stream().collect(Collectors.toMap(
             VerifiedDocumentAccess.VerifiedVersion::documentPublicId, Function.identity(), (first, second) -> first));
         for (Item item : items) {
             var document = documentMap.get(item.documentPublicId());
-            jdbc.update("insert into payslip_batch_item(public_id,revision_id,employee_id,period_start,document_id,document_version_id) "
-                + "values(gen_random_uuid(),?,?,?,?,?)", revision, employeeMap.get(item.employeePublicId()).getId(),
+            payslips.insertItem(revision, employeeMap.get(item.employeePublicId()).getId(),
                 item.period().atDay(1), document.documentId(), document.versionId());
         }
         return revision;
     }
 
     private Snapshot snapshot(UUID publicId, boolean lock) {
-        String sql = "select b.id,b.status,r.id,r.revision_number from payslip_batch b join payslip_batch_revision r "
-            + "on r.id=b.current_revision_id where b.public_id=?" + (lock ? " for update of b" : "");
-        List<Snapshot> rows = jdbc.query(sql, (row, index) -> new Snapshot(row.getLong(1), row.getString(2),
-            row.getLong(3), row.getLong(4), List.of()), publicId);
-        Snapshot batch = rows.stream().findFirst().orElseThrow(ResourceNotFoundException::new);
-        List<Item> items = jdbc.query("select e.public_id,i.period_start,d.public_id from payslip_batch_item i "
-            + "join employees e on e.id=i.employee_id join private_document d on d.id=i.document_id "
-            + "where i.revision_id=? order by i.employee_id,i.period_start", (row, index) ->
-            new Item(row.getObject(1, UUID.class), YearMonth.from(row.getDate(2).toLocalDate()), row.getObject(3, UUID.class)), batch.revisionId());
+        SnapshotRecord batch = payslips.findSnapshot(publicId, lock).orElseThrow(ResourceNotFoundException::new);
+        List<Item> items = payslips.findItems(batch.revisionId()).stream()
+            .map(record -> new Item(record.employeePublicId(), record.period(), record.documentPublicId()))
+            .toList();
         return new Snapshot(batch.batchId(), batch.status(), batch.revisionId(), batch.revision(), items);
     }
 
@@ -330,7 +318,7 @@ public class PayslipService {
     }
 
     private static List<Item> concat(List<Item> first, List<Item> second) {
-        return java.util.stream.Stream.concat(first.stream(), second.stream()).toList();
+        return Stream.concat(first.stream(), second.stream()).toList();
     }
 
     private static void requireSame(Snapshot before, Snapshot current, long expected) {
@@ -342,5 +330,7 @@ public class PayslipService {
     }
 
     private record Snapshot(long batchId, String status, long revisionId, long revision, List<Item> items) { }
-    private record PublicationItem(long id, long employeeId, Date period) { }
+    private record PublicationItem(long id, long employeeId, LocalDate period, UUID employeePublicId) { }
+
+    private record PublicationIntent(String employeePublicId, String period) { }
 }

@@ -60,6 +60,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.Collections;
+import org.springframework.dao.DataAccessException;
 
 @Tag("postgres")
 @SpringBootTest(properties={"peoplecore.runtime.role=api","spring.jpa.hibernate.ddl-auto=validate","peoplecore.organization.allowed-units=ENG"})
@@ -291,14 +293,14 @@ class AttendanceRecordingAcceptancePostgresTest {
     void runtimeCannotRewriteCorrectionAggregateAfterSubmission() {
         var draft=draft();
         var pending=commands.act(member,key(),"SUBMIT",action(draft,null,null,null,null));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "UPDATE attendance_correction SET proposed_in=proposed_in-INTERVAL '1 minute',version=version+1 WHERE public_id=?",
             pending.publicId()));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "UPDATE attendance_correction SET status='APPROVED',version=version+1 WHERE public_id=?",pending.publicId()));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "UPDATE attendance_correction SET version=version+5 WHERE public_id=?",pending.publicId()));
-        assertThrows(org.springframework.dao.DataAccessException.class,()->jdbc.update(
+        assertThrows(DataAccessException.class,()->jdbc.update(
             "DELETE FROM attendance_correction WHERE public_id=?",pending.publicId()));
     }
 
@@ -366,12 +368,12 @@ class AttendanceRecordingAcceptancePostgresTest {
     void attendanceReviewerConfigurationFailsClosedAndChecksFallbackEligibility() {
         var employeeRow=employeeRows.findByPublicId(employee).orElseThrow();
         assertThrows(IllegalArgumentException.class,()->reviewers.publish(new PublishRules(UUID.randomUUID(),List.of()),hr));
-        assertThrows(IllegalArgumentException.class,()->reviewers.publish(new PublishRules(UUID.randomUUID(),java.util.Collections.singletonList(null)),hr));
+        assertThrows(IllegalArgumentException.class,()->reviewers.publish(new PublishRules(UUID.randomUUID(),Collections.singletonList(null)),hr));
         UUID duplicateId=UUID.randomUUID();
         assertThrows(IllegalArgumentException.class,()->reviewers.publish(new PublishRules(UUID.randomUUID(),List.of(
             new Rule(duplicateId,1,"ENG",null),new Rule(duplicateId,2,"ENG",null))),hr));
         assertThrows(IllegalArgumentException.class,()->reviewers.publish(new PublishRules(UUID.randomUUID(),
-            java.util.Collections.nCopies(101,new Rule(UUID.randomUUID(),1,"ENG",null))),hr));
+            Collections.nCopies(101,new Rule(UUID.randomUUID(),1,"ENG",null))),hr));
         assertThrows(ResourceNotFoundException.class,()->reviewers.publish(new PublishRules(UUID.randomUUID(),List.of(
             new Rule(UUID.randomUUID(),1,"ENG",UUID.randomUUID()))),hr));
 

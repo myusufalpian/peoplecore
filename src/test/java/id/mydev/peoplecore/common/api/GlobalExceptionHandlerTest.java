@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 class GlobalExceptionHandlerTest {
     @Test
@@ -18,7 +20,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void staleRevisionsConflictWithoutLeakingInternalMessage() {
         var response = new GlobalExceptionHandler().handleOptimisticLock(
-            new org.springframework.orm.ObjectOptimisticLockingFailureException("Stale", new IllegalStateException("v")));
+            new ObjectOptimisticLockingFailureException("Stale", new IllegalStateException("v")));
         assertEquals(409, response.getStatusCode().value());
         assertEquals("STALE_REVISION", response.getBody().key());
     }
@@ -26,7 +28,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void lockTimeoutsReturnRetryableStatus() {
         var response = new GlobalExceptionHandler().handlePessimisticLock(
-            new org.springframework.dao.PessimisticLockingFailureException("Locked", new IllegalStateException("row")));
+            new PessimisticLockingFailureException("Locked", new IllegalStateException("row")));
         assertEquals(503, response.getStatusCode().value());
         assertEquals("LOCK_TIMEOUT", response.getBody().key());
         assertEquals("1", response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER));

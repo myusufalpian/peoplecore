@@ -8,9 +8,11 @@ import jakarta.persistence.LockModeType;
 
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 public interface HolidayCalendarRevisionRepository extends JpaRepository<HolidayCalendarRevision, Long> {
-    org.springframework.data.domain.Page<HolidayCalendarRevision> findByStatus(String status, org.springframework.data.domain.Pageable pageable);
+    Page<HolidayCalendarRevision> findByStatus(String status, Pageable pageable);
 
     Optional<HolidayCalendarRevision> findByPublicId(UUID publicId);
 

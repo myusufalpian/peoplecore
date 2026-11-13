@@ -4,9 +4,10 @@ import id.mydev.peoplecore.common.api.ApiData;
 import id.mydev.peoplecore.common.security.CurrentCaller;
 import id.mydev.peoplecore.document.application.command.DocumentCommands;
 import id.mydev.peoplecore.document.application.service.DocumentStatusQuery;
+import id.mydev.peoplecore.document.application.service.DocumentUploadService;
 import id.mydev.peoplecore.document.application.service.DocumentUploadService.Request;
 import id.mydev.peoplecore.document.application.service.DocumentUploadService.Upload;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.document.infrastructure.config.DocumentVerificationScheduler;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -69,7 +70,7 @@ public class DocumentUploadController {
     }
 
     @GetMapping("/{documentId}")
-    public ResponseEntity<ApiData<Upload>> status(@PathVariable UUID documentId) {
+    public ResponseEntity<ApiData<DocumentUploadService.Metadata>> status(@PathVariable UUID documentId) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
             .body(ApiData.of(status.status(documentId, CurrentCaller.require())));
     }

@@ -25,6 +25,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import jakarta.servlet.ServletInputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.IntStream;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @Import(ApiSecurityHttpTest.Controller.class)
@@ -38,8 +45,8 @@ class ApiSecurityHttpTest {
     }
     @Autowired WebApplicationContext context;
     @Autowired RequestBodyLimitFilter bodyFilter;
-    @Autowired org.springframework.security.web.SecurityFilterChain securityChain;
-    @Autowired org.springframework.boot.web.servlet.FilterRegistrationBean<RequestBodyLimitFilter> bodyFilterRegistration;
+    @Autowired SecurityFilterChain securityChain;
+    @Autowired FilterRegistrationBean<RequestBodyLimitFilter> bodyFilterRegistration;
     private MockMvc mvc;
 
     @BeforeEach
@@ -62,7 +69,7 @@ class ApiSecurityHttpTest {
     @Test
     void httpBodyAndJsonStructureLimitsUseApplicationErrorContract() throws Exception {
         mvc.perform(post("/bounded").with(user("actor")).with(csrf()).contentType("application/json")
-                .content(" ".repeat(id.mydev.peoplecore.common.api.PayloadLimits.MAX_BODY_BYTES + 1)))
+                .content(" ".repeat(PayloadLimits.MAX_BODY_BYTES + 1)))
             .andExpect(status().isContentTooLarge()).andExpect(jsonPath("$.key").value("PAYLOAD_TOO_LARGE"))
             .andExpect(jsonPath("$.timestamp").exists()).andExpect(header().exists("X-Request-Id"));
         mvc.perform(post("/bounded").with(user("actor")).with(csrf()).contentType("application/json")
@@ -75,16 +82,16 @@ class ApiSecurityHttpTest {
 
     @Test
     void unauthenticatedJsonRequestIsRejectedWithoutReadingBody() throws Exception {
-        var bodyRead = new java.util.concurrent.atomic.AtomicBoolean();
+        var bodyRead = new AtomicBoolean();
         mvc.perform(get("/secured").contentType("application/json").with(request -> {
-            return new org.springframework.mock.web.MockHttpServletRequest(request.getServletContext()) {
+            return new MockHttpServletRequest(request.getServletContext()) {
                 {
                     setMethod("GET");
                     setRequestURI("/secured");
                     setServletPath("/secured");
                     setContentType("application/json");
                 }
-                @Override public jakarta.servlet.ServletInputStream getInputStream() {
+                @Override public ServletInputStream getInputStream() {
                     bodyRead.set(true);
                     throw new AssertionError("Unauthenticated request body must not be read");
                 }
@@ -92,8 +99,8 @@ class ApiSecurityHttpTest {
         })).andExpect(status().isUnauthorized());
         org.junit.jupiter.api.Assertions.assertFalse(bodyRead.get());
         var filters = securityChain.getFilters();
-        int authorizationIndex = java.util.stream.IntStream.range(0, filters.size())
-            .filter(index -> filters.get(index) instanceof org.springframework.security.web.access.intercept.AuthorizationFilter)
+        int authorizationIndex = IntStream.range(0, filters.size())
+            .filter(index -> filters.get(index) instanceof AuthorizationFilter)
             .findFirst().orElseThrow();
         org.junit.jupiter.api.Assertions.assertTrue(filters.indexOf(bodyFilter) > authorizationIndex);
         org.junit.jupiter.api.Assertions.assertFalse(bodyFilterRegistration.isEnabled());

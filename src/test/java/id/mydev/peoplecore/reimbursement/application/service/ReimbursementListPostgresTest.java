@@ -1,5 +1,6 @@
 package id.mydev.peoplecore.reimbursement.application.service;
 
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementWorkflowRepository;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
@@ -29,6 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import java.util.Set;
 
 @Tag("postgres")
 class ReimbursementListPostgresTest {
@@ -60,7 +62,7 @@ class ReimbursementListPostgresTest {
             stub(employees, first, "ENG");
             stub(employees, second, "ENG");
             stub(employees, outside, "OTHER");
-            var service = new ReimbursementWorkflowService(fixture.jdbc, employees, access,
+            var service = new ReimbursementWorkflowService(new JdbcReimbursementWorkflowRepository(fixture.jdbc), employees, access,
                 mock(ReimbursementSubmissionService.class), mock(ReimbursementCategoryService.class),
                 mock(EntityManager.class), mock(AdmissionGuard.class),
                 Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC));
@@ -73,7 +75,7 @@ class ReimbursementListPostgresTest {
             var returned = new HashSet<UUID>();
             returned.add(page.items().getFirst().publicId());
             returned.add(next.items().getFirst().publicId());
-            assertEquals(java.util.Set.of(firstClaim, secondClaim), returned);
+            assertEquals(Set.of(firstClaim, secondClaim), returned);
             assertEquals(false, returned.contains(outsideClaim));
             when(access.requireActive(eq(caller), any())).thenReturn(actor).thenThrow(new AccessDeniedException("cutoff"));
             assertThrows(AccessDeniedException.class, () -> transactions.execute(status -> service.list(10, null, caller)));

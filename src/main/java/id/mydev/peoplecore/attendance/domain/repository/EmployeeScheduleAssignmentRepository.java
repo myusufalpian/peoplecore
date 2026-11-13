@@ -9,13 +9,14 @@ import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.LocalDate;
 
 public interface EmployeeScheduleAssignmentRepository extends JpaRepository<EmployeeScheduleAssignment, Long> {
     List<EmployeeScheduleAssignment> findByEmployeeIdAndSupersededFalse(Long employeeId);
 
     @Query("select a from EmployeeScheduleAssignment a where a.employeeId = :employeeId and a.superseded = false "
         + "and a.fromDate < :toDate and (a.toDate is null or a.toDate > :fromDate)")
-    List<EmployeeScheduleAssignment> findOverlapping(Long employeeId, java.time.LocalDate fromDate, java.time.LocalDate toDate);
+    List<EmployeeScheduleAssignment> findOverlapping(Long employeeId, LocalDate fromDate, LocalDate toDate);
 
     Optional<EmployeeScheduleAssignment> findByPublicId(UUID publicId);
 

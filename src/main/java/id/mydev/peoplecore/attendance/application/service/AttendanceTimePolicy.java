@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.Objects;
 
 public final class AttendanceTimePolicy {
     public enum Action { IN, OUT }
@@ -36,7 +37,7 @@ public final class AttendanceTimePolicy {
             || !proposedOut.isAfter(proposedIn) || proposedOut.isAfter(now))) {
             throw new IllegalArgumentException("Proposed OUT is outside its accepted window or order");
         }
-        if (proposedIn.equals(existingIn) && java.util.Objects.equals(proposedOut, existingOut)) {
+        if (proposedIn.equals(existingIn) && Objects.equals(proposedOut, existingOut)) {
             throw new IllegalArgumentException("Correction must change or add an action");
         }
     }

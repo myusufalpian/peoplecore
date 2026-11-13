@@ -1,5 +1,7 @@
 package id.mydev.peoplecore.attendance.application.command;
 
+import tools.jackson.databind.JsonNode;
+
 import id.mydev.peoplecore.attendance.application.command.AttendancePayloads.ClockPayload;
 import id.mydev.peoplecore.attendance.application.command.AttendancePayloads.CorrectionAction;
 import id.mydev.peoplecore.attendance.application.command.AttendancePayloads.CorrectionPayload;
@@ -27,6 +29,7 @@ import java.time.Instant;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.time.Clock;
 
 @Component
 public class AttendanceCommands {
@@ -36,9 +39,9 @@ public class AttendanceCommands {
     private final AttendanceReviewerService reviewers;
     private final CommandExecutionService commands;
     private final ObjectMapper mapper;
-    private final java.time.Clock clock;
+    private final Clock clock;
     public AttendanceCommands(AttendanceRecordingService recording,AttendanceCorrectionService corrections,
-        AttendanceReviewerService reviewers,CommandExecutionService commands,ObjectMapper mapper,java.time.Clock clock) {
+        AttendanceReviewerService reviewers,CommandExecutionService commands,ObjectMapper mapper,Clock clock) {
         this.recording=recording;this.corrections=corrections;this.reviewers=reviewers;
         this.commands=commands;this.mapper=mapper;this.clock=clock;
     }
@@ -70,14 +73,14 @@ public class AttendanceCommands {
         return execute(caller,key,"ATTENDANCE_RULE_ACTIVATE",payload,()->reviewers.activate(payload,caller),
             RuleResult.class,RuleResult::publicId);
     }
-    public void verifyCommand(String type,tools.jackson.databind.JsonNode payload,Authentication caller) {
+    public void verifyCommand(String type,JsonNode payload,Authentication caller) {
         verify(type,payload,null,caller,false);
     }
-    public void verifyReplay(String type,tools.jackson.databind.JsonNode payload,String recordedResult,
+    public void verifyReplay(String type,JsonNode payload,String recordedResult,
                              Authentication caller) {
         verify(type,payload,recordedResult,caller,true);
     }
-    private void verify(String type,tools.jackson.databind.JsonNode payload,String recordedResult,
+    private void verify(String type,JsonNode payload,String recordedResult,
                         Authentication caller,boolean replay) {
         if ("ATTENDANCE_RULE_PUBLISH".equals(type)) {
             reviewers.verifyPublication(caller,payload,Instant.now(clock));return;
@@ -103,7 +106,7 @@ public class AttendanceCommands {
             return;
         }
         var id=payload.get("correctionId");
-        if (id==null || id.isNull()) throw new id.mydev.peoplecore.common.api.ResourceNotFoundException();
+        if (id==null || id.isNull()) throw new ResourceNotFoundException();
         corrections.verifyAction(type,UUID.fromString(id.asString()),caller,replay);
     }
 

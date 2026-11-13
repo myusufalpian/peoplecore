@@ -25,10 +25,14 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.io.ByteArrayOutputStream;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.UUID;
 
 class ClamAvScannerTest {
     private static final String DIGEST = "a".repeat(64);
-    private static final java.util.UUID GENERATION = java.util.UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final UUID GENERATION = UUID.fromString("00000000-0000-0000-0000-000000000001");
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final byte[] DOCUMENT = "%PDF-1.7".getBytes(StandardCharsets.US_ASCII);
     @TempDir Path temporary;
@@ -68,7 +72,7 @@ class ClamAvScannerTest {
 
     @Test
     void rejectsIncompleteOrUnsafeReadinessEvidence() {
-        var statuses = new java.util.ArrayList<ClamAvScanner.ScannerStatus>();
+        var statuses = new ArrayList<ClamAvScanner.ScannerStatus>();
         statuses.add(null);
         statuses.add(new ClamAvScanner.ScannerStatus(null, DIGEST, DIGEST, "engine", "definitions", NOW.plusSeconds(30), true, true));
         statuses.add(new ClamAvScanner.ScannerStatus(GENERATION, null, DIGEST, "engine", "definitions", NOW.plusSeconds(30), true, true));
@@ -92,7 +96,7 @@ class ClamAvScannerTest {
         try (ServerSocketChannel server = server(); var executor = Executors.newVirtualThreadPerTaskExecutor();
              ClamAvScanner scanner = new ClamAvScanner(temporary.resolve("clamd.sock"), Duration.ofSeconds(5), 1,
                  () -> calls.getAndIncrement() == 0 ? ready()
-                     : new ClamAvScanner.ScannerStatus(java.util.UUID.randomUUID(), DIGEST, DIGEST, "engine", "definitions", NOW.plusSeconds(60), true, true),
+                     : new ClamAvScanner.ScannerStatus(UUID.randomUUID(), DIGEST, DIGEST, "engine", "definitions", NOW.plusSeconds(60), true, true),
                  Clock.fixed(NOW, ZoneOffset.UTC))) {
             var work = executor.submit(() -> serve(server, "stream: OK\0"));
             assertThrows(IOException.class, () -> scanner.scan(new ByteArrayInputStream(DOCUMENT), "application/pdf", DOCUMENT.length));
@@ -292,7 +296,7 @@ class ClamAvScannerTest {
             }
             work.get();
         }
-        java.nio.file.Files.deleteIfExists(temporary.resolve("clamd.sock"));
+        Files.deleteIfExists(temporary.resolve("clamd.sock"));
     }
 
     private ClamAvScanner scanner(ClamAvScanner.ScannerStatus status, Duration timeout) {
@@ -314,7 +318,7 @@ class ClamAvScannerTest {
             var input = new DataInputStream(Channels.newInputStream(connection));
             byte[] command = input.readNBytes(10);
             assertEquals("zINSTREAM\0", new String(command, StandardCharsets.US_ASCII));
-            var content = new java.io.ByteArrayOutputStream();
+            var content = new ByteArrayOutputStream();
             int size;
             while ((size = input.readInt()) != 0) {
                 content.write(input.readNBytes(size));

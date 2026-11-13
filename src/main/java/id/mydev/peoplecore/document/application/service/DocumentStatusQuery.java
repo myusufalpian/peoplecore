@@ -20,7 +20,7 @@ public class DocumentStatusQuery {
     }
 
     @Transactional
-    public DocumentUploadService.Upload status(UUID documentPublicId, Authentication caller) {
+    public DocumentUploadService.Metadata status(UUID documentPublicId, Authentication caller) {
         admission.acquire(AdmissionGuard.Mode.SHARED);
         entities.flush();
         entities.clear();

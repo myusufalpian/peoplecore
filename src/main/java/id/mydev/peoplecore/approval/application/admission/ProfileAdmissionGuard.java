@@ -1,16 +1,12 @@
 package id.mydev.peoplecore.approval.application.admission;
 
 import id.mydev.peoplecore.common.command.AdmissionGuard;
+import id.mydev.peoplecore.approval.domain.repository.ProfileAdmissionLockRepository;
 import id.mydev.peoplecore.common.command.CommandBusyException;
 import id.mydev.peoplecore.common.command.CommandExecutionService;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.util.Assert;
 
 import java.nio.ByteBuffer;
-import java.sql.SQLException;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.Set;
@@ -75,6 +71,10 @@ public class ProfileAdmissionGuard implements AdmissionGuard {
         "DOCUMENT_CREATE",
         "DOCUMENT_RESERVE_UPLOAD",
         "DOCUMENT_FINALIZE",
+        "DOCUMENT_HOLD_PLACE",
+        "DOCUMENT_HOLD_RELEASE",
+        "DOCUMENT_DELETE_CLAIM",
+        "DOCUMENT_DELETE_RESTORE",
         "REIMBURSEMENT_CREATE",
         "REIMBURSEMENT_EDIT",
         "REIMBURSEMENT_SUBMIT",
@@ -113,18 +113,10 @@ public class ProfileAdmissionGuard implements AdmissionGuard {
         "LEAVE_RULE_ACTIVATE",
         "REIMBURSEMENT_CATEGORY_PUBLISH");
 
-    private final JdbcTemplate jdbc;
-    private final boolean postgres;
+    private final ProfileAdmissionLockRepository locks;
 
-    public ProfileAdmissionGuard(JdbcTemplate jdbc) {
-        this.jdbc = Objects.requireNonNull(jdbc, "jdbc must not be null");
-        this.postgres = detectPostgres(jdbc);
-    }
-
-    private static boolean detectPostgres(JdbcTemplate jdbc) {
-        String product = jdbc.execute((java.sql.Connection connection) ->
-            connection.getMetaData().getDatabaseProductName());
-        return "PostgreSQL".equals(product);
+    public ProfileAdmissionGuard(ProfileAdmissionLockRepository locks) {
+        this.locks = Objects.requireNonNull(locks, "locks must not be null");
     }
 
     @Override
@@ -143,24 +135,6 @@ public class ProfileAdmissionGuard implements AdmissionGuard {
 
     @Override
     public void acquire(Mode mode) {
-        Objects.requireNonNull(mode, "mode must not be null");
-        if (!postgres) {
-            return;
-        }
-        Assert.state(TransactionSynchronizationManager.isActualTransactionActive(),
-            "Admission coordination requires a transaction");
-        jdbc.execute("SET LOCAL lock_timeout = '" + DOMAIN_LOCK_TIMEOUT + "'");
-        String statement = Mode.EXCLUSIVE.equals(mode)
-            ? "SELECT pg_advisory_xact_lock(" + ADMISSION_KEY + ")"
-            : "SELECT pg_advisory_xact_lock_shared(" + ADMISSION_KEY + ")";
-        try {
-            jdbc.execute(statement);
-        } catch (DataAccessException ex) {
-            if (ex.getMostSpecificCause() instanceof SQLException sql
-                && "55P03".equals(sql.getSQLState())) {
-                throw new CommandBusyException("Admission guard wait timed out", ex);
-            }
-            throw ex;
-        }
+        locks.acquire(mode);
     }
 }

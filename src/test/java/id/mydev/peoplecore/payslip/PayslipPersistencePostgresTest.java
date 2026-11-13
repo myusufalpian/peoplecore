@@ -71,9 +71,40 @@ class PayslipPersistencePostgresTest {
                 + "values(gen_random_uuid(),?,1,now()) returning id", Long.class, batch);
 
             assertThrows(DataAccessException.class, () -> item(jdbc, revision, stranger, document));
-            jdbc.update("update private_document set deletion_state='CLAIMED' where id=?", document.id());
+            jdbc.update("update private_document set deletion_state='CLAIMED',deletion_requested_at=now(),deletion_restore_deadline=now()+interval '30 days' where id=?", document.id());
             assertThrows(DataAccessException.class, () -> item(jdbc, revision, owner, document));
         }
+    }
+
+    @Test
+    void reviewedOrPublishedPayslipDocumentCannotBeClaimedForDeletion() {
+        try (var fixture = new PostgresFixture()) {
+            fixture.flyway().migrate();
+            fixture.grantRuntime();
+            JdbcTemplate jdbc = fixture.runtime();
+            long actor = actor(jdbc);
+            long employee = employee(jdbc);
+            var document = verifiedDocument(jdbc, employee);
+            long batch = jdbc.queryForObject("insert into payslip_batch(public_id,created_by,created_at,updated_at) "
+                + "values(gen_random_uuid(),?,now(),now()) returning id", Long.class, actor);
+            long revision = jdbc.queryForObject("insert into payslip_batch_revision(public_id,batch_id,revision_number,created_at) "
+                + "values(gen_random_uuid(),?,1,now()) returning id", Long.class, batch);
+            long item = item(jdbc, revision, employee, document);
+            jdbc.update("update payslip_batch set current_revision_id=? where id=?", revision, batch);
+            jdbc.update("update payslip_batch_revision set status='REVIEWED',reviewed_by=?,reviewed_at=now() where id=?",
+                actor, revision);
+
+            assertThrows(DataAccessException.class, () -> claim(jdbc, document.id()));
+
+            jdbc.update("update payslip_batch set status='REVIEWED' where id=?", batch);
+            publication(jdbc, actor, revision, item, employee);
+            assertThrows(DataAccessException.class, () -> claim(jdbc, document.id()));
+        }
+    }
+
+    private static void claim(JdbcTemplate jdbc, long documentId) {
+        jdbc.update("update private_document set deletion_state='CLAIMED',deletion_requested_at=now(),"
+            + "deletion_restore_deadline=now()+interval '30 days' where id=?", documentId);
     }
 
     private static long actor(JdbcTemplate jdbc) {

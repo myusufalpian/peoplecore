@@ -36,6 +36,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 class AttendanceContextControllerTest {
@@ -113,16 +116,16 @@ class AttendanceContextControllerTest {
 
     @Autowired WebApplicationContext context;
 
-    @org.springframework.boot.test.context.TestConfiguration
+    @TestConfiguration
     static class Fakes {
-        @org.springframework.context.annotation.Bean
-        @org.springframework.context.annotation.Primary
+        @Bean
+        @Primary
         WorkCalendarService workCalendarService() {
             return new FakeCalendars();
         }
 
-        @org.springframework.context.annotation.Bean
-        @org.springframework.context.annotation.Primary
+        @Bean
+        @Primary
         WorkCalendarCommands workCalendarCommands() {
             return new FakeCommands();
         }

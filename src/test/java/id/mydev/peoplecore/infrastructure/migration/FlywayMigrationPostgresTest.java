@@ -11,6 +11,9 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.HashMap;
+import java.util.List;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 @Tag("postgres")
 class FlywayMigrationPostgresTest {
@@ -34,9 +37,9 @@ class FlywayMigrationPostgresTest {
             fixture.jdbc.update("insert into profile_route_evaluation(proposal_id,revision_id,evaluated_at,org_unit,result,reviewer_account_public_id) "
                 + "select proposal_id,id,now(),'ENG','MATCHED',route_reviewer_account_public_id from profile_revision");
             insertReceipt(fixture, "PROFILE_SUBMIT", "profile-upgrade", "{\"status\":\"PENDING\"}");
-            var tables = java.util.List.of("employees", "profile_proposal", "profile_revision", "profile_revision_change",
+            var tables = List.of("employees", "profile_proposal", "profile_revision", "profile_revision_change",
                 "profile_assignment", "profile_route_evaluation", "command_receipts");
-            var before = new java.util.HashMap<String, String>();
+            var before = new HashMap<String, String>();
             for (String table : tables) {
                 before.put(table, fixture.jdbc.queryForObject("select jsonb_agg(to_jsonb(t) order by id)::text from " + table + " t", String.class));
             }
@@ -78,7 +81,7 @@ class FlywayMigrationPostgresTest {
                 .target("7").load().migrate();
             fixture.jdbc.update("insert into employees(public_id,employee_number,created_at) values(gen_random_uuid(),'PRE-HISTORY',now())");
             fixture.jdbc.update("insert into enrollment_invitations(public_id,employee_id,intended_identity_ref,secret_hash,status,expires_at,issued_at,expected_issuer,expected_subject) select gen_random_uuid(),id,'IDV-1',repeat('a',64),'REVOKED',now(),now(),'https://idp.example','member' from employees");
-            assertEquals(16, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(20, fixture.flyway().migrate().migrationsExecuted);
             assertEquals(true, fixture.jdbc.queryForObject("select employment_start_date is null and employment_end_date is null from employees", Boolean.class));
             assertEquals(true, fixture.jdbc.queryForObject("select revoked_at is null from enrollment_invitations", Boolean.class));
             assertThrows(DataAccessException.class, () -> fixture.jdbc.update("update employees set employment_start_date='2026-01-02',employment_end_date='2026-01-01'"));
@@ -101,7 +104,7 @@ class FlywayMigrationPostgresTest {
             insertReceipt(fixture, "INVITATION_REISSUE", "json-null", "null");
             insertReceipt(fixture, "INVITATION_ISSUE", "current", "{\"invitationId\":\"current-id\",\"status\":\"ISSUED\"}");
             insertReceipt(fixture, "EMPLOYEE_CREATE", "other", "{\"employeeId\":\"unchanged\"}");
-            assertEquals(17, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(21, fixture.flyway().migrate().migrationsExecuted);
             assertEquals(false, fixture.jdbc.queryForObject("select jsonb_exists(result_payload::jsonb, 'secret') from command_receipts where idempotency_key='legacy'", Boolean.class));
             assertEquals("legacy-id", fixture.jdbc.queryForObject("select result_payload::jsonb->>'invitationId' from command_receipts where idempotency_key='legacy'", String.class));
             assertEquals(3, fixture.jdbc.queryForObject("select count(*) from command_receipts where result_payload is null", Integer.class));
@@ -121,7 +124,7 @@ class FlywayMigrationPostgresTest {
             insertReceipt(fixture, "INVITATION_ISSUE", "current", "{\"invitationId\":\"current-id\"}");
             fixture.jdbc.update("insert into employees(public_id,employee_number,created_at) values(gen_random_uuid(),'CURRENT',now())");
             fixture.jdbc.update("insert into enrollment_invitations(public_id,employee_id,intended_identity_ref,secret_hash,status,expires_at,issued_at,expected_issuer,expected_subject) select gen_random_uuid(),id,'IDV-1',repeat('a',64),'ISSUED',now()+interval '1 day',now(),'https://idp.example','member' from employees");
-            assertEquals(17, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(21, fixture.flyway().migrate().migrationsExecuted);
             assertEquals("{\"invitationId\":\"current-id\"}", fixture.jdbc.queryForObject("select result_payload from command_receipts", String.class));
             assertEquals(0L, fixture.jdbc.queryForObject("select generation from auth_generation", Long.class));
             assertEquals(1, fixture.jdbc.queryForObject("select count(*) from enrollment_invitations where status='ISSUED'", Integer.class));
@@ -138,7 +141,7 @@ class FlywayMigrationPostgresTest {
             Flyway.configure().dataSource(fixture.url, fixture.username, fixture.password).schemas(fixture.schema)
                 .target("1").load().migrate();
             fixture.jdbc.update("insert into audit_events(event_id, actor_id, action, aggregate_type, created_at) values(gen_random_uuid(), 'actor', 'CREATE', 'EMPLOYEE', now())");
-            assertEquals(22, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(26, fixture.flyway().migrate().migrationsExecuted);
             assertEquals(1, fixture.jdbc.queryForObject("select count(*) from audit_events", Integer.class));
             assertThrows(DataAccessException.class, () -> fixture.jdbc.update("update audit_events set action='EDIT'"));
             assertThrows(DataAccessException.class, () -> fixture.jdbc.update("delete from audit_events"));
@@ -153,8 +156,8 @@ class FlywayMigrationPostgresTest {
             fixture.flyway().migrate();
             fixture.grantRuntime();
             assertThrows(IllegalStateException.class, () -> new RuntimeDatabaseGuard(
-                new org.springframework.jdbc.datasource.DriverManagerDataSource(fixture.url, fixture.username, fixture.password)).afterPropertiesSet());
-            new RuntimeDatabaseGuard(new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                new DriverManagerDataSource(fixture.url, fixture.username, fixture.password)).afterPropertiesSet());
+            new RuntimeDatabaseGuard(new DriverManagerDataSource(
                 fixture.url, fixture.runtimeUsername, fixture.runtimePassword)).afterPropertiesSet();
             var runtime = fixture.runtime();
             assertEquals(false, runtime.queryForObject("select rolsuper from pg_roles where rolname=current_user", Boolean.class));
@@ -173,7 +176,7 @@ class FlywayMigrationPostgresTest {
         try (var fixture = new PostgresFixture()) {
             var configuration = Map.of("PEOPLECORE_MIGRATION_DB_URL", fixture.url,
                 "PEOPLECORE_MIGRATION_DB_USERNAME", fixture.username, "PEOPLECORE_MIGRATION_DB_PASSWORD", fixture.password);
-            assertEquals(23, MigrationRunner.migrate(configuration));
+            assertEquals(27, MigrationRunner.migrate(configuration));
             assertEquals(0, MigrationRunner.migrate(configuration));
             assertThrows(IllegalArgumentException.class, () -> MigrationRunner.migrate(Map.of()));
         }

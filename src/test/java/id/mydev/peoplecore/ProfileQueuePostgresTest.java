@@ -29,6 +29,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.organization.application.service.ProfileProposalService;
 
 @Tag("postgres")
 @SpringBootTest(properties = {
@@ -54,7 +55,7 @@ class ProfileQueuePostgresTest {
         properties.add("spring.datasource.password", () -> DATABASE.runtimePassword);
     }
 
-    @Autowired id.mydev.peoplecore.organization.application.service.ProfileProposalService proposals;
+    @Autowired ProfileProposalService proposals;
     @Autowired UserAccountRepository accountRepository;
     @Autowired RoleAssignmentRepository roleRepository;
     @Autowired JdbcTemplate jdbc;

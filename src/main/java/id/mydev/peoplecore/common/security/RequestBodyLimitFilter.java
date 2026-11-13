@@ -19,6 +19,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
+import java.util.Locale;
 
 @Component
 public class RequestBodyLimitFilter extends OncePerRequestFilter {
@@ -34,7 +36,7 @@ public class RequestBodyLimitFilter extends OncePerRequestFilter {
         if (type == null) {
             return true;
         }
-        String base = type.split(";", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        String base = type.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
         return !(base.equals(MediaType.APPLICATION_JSON_VALUE) || base.endsWith("+json"));
     }
 
@@ -85,7 +87,7 @@ public class RequestBodyLimitFilter extends OncePerRequestFilter {
         public BufferedReader getReader() {
             String encoding = getCharacterEncoding();
             return new BufferedReader(new InputStreamReader(getInputStream(),
-                encoding == null ? StandardCharsets.UTF_8 : java.nio.charset.Charset.forName(encoding)));
+                encoding == null ? StandardCharsets.UTF_8 : Charset.forName(encoding)));
         }
     }
 }

@@ -4,6 +4,7 @@ import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.common.command.CommandExecutionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import id.mydev.peoplecore.approval.infrastructure.persistence.JdbcProfileAdmissionLockRepository;
 
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
@@ -50,7 +51,7 @@ class ProfileAdmissionGuardTest {
                 }
                 throw new UnsupportedOperationException(method.getName());
             });
-        return new ProfileAdmissionGuard(new JdbcTemplate(dataSource));
+        return new ProfileAdmissionGuard(new JdbcProfileAdmissionLockRepository(new JdbcTemplate(dataSource)));
     }
 
     @Test
@@ -85,7 +86,7 @@ class ProfileAdmissionGuardTest {
                 throw new UnsupportedOperationException("No database connection");
             });
         assertThrows(RuntimeException.class,
-            () -> new ProfileAdmissionGuard(new JdbcTemplate(broken)));
+            () -> new ProfileAdmissionGuard(new JdbcProfileAdmissionLockRepository(new JdbcTemplate(broken))));
     }
 
     @Test

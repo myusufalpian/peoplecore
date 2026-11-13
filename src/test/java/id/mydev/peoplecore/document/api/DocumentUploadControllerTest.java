@@ -2,6 +2,8 @@ package id.mydev.peoplecore.document.api;
 
 import id.mydev.peoplecore.document.application.command.DocumentCommands;
 import id.mydev.peoplecore.document.application.service.DocumentStatusQuery;
+import id.mydev.peoplecore.document.application.service.DocumentUploadService;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.document.infrastructure.config.DocumentVerificationScheduler;
 import id.mydev.peoplecore.support.JwtAuthFixture;
 import java.net.URI;
@@ -57,5 +59,20 @@ class DocumentUploadControllerTest {
         assertEquals("no-store", response.getHeaders().getCacheControl());
         assertEquals(url, response.getBody().data());
         assertFalse(url.toString().contains("secret"));
+    }
+
+    @Test
+    void statusReturnsPurposeAndVerifiedMetadataWithoutCaching() {
+        Authentication caller = JwtAuthFixture.token("https://identity.example", "owner");
+        SecurityContextHolder.getContext().setAuthentication(caller);
+        UUID documentId = UUID.randomUUID();
+        var metadata = new DocumentUploadService.Metadata(documentId, Purpose.CLAIM_EVIDENCE, "VERIFIED",
+            "application/pdf", 12L, Instant.parse("2026-11-01T00:00:00Z"), Instant.parse("2026-11-01T00:05:00Z"));
+        when(status.status(documentId, caller)).thenReturn(metadata);
+
+        var response = controller.status(documentId);
+
+        assertEquals(metadata, response.getBody().data());
+        assertEquals("no-store", response.getHeaders().getCacheControl());
     }
 }

@@ -5,6 +5,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.mockito.Mockito.mockStatic;
+import org.springframework.boot.SpringApplication;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -17,9 +18,9 @@ class PeoplecoreApplicationTests {
 	@Test
 	void startsApplication() {
 		String[] arguments = new String[0];
-		try (var springApplication = mockStatic(org.springframework.boot.SpringApplication.class)) {
+		try (var springApplication = mockStatic(SpringApplication.class)) {
 			PeoplecoreApplication.main(arguments);
-			springApplication.verify(() -> org.springframework.boot.SpringApplication.run(PeoplecoreApplication.class, arguments));
+			springApplication.verify(() -> SpringApplication.run(PeoplecoreApplication.class, arguments));
 		}
 	}
 

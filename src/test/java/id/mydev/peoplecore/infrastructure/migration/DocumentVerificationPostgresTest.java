@@ -1,5 +1,7 @@
 package id.mydev.peoplecore.infrastructure.migration;
 
+import id.mydev.peoplecore.document.infrastructure.persistence.JdbcDocumentVerificationRepository;
+
 import id.mydev.peoplecore.support.PostgresFixture;
 import id.mydev.peoplecore.document.infrastructure.storage.DocumentCopyClaim;
 import id.mydev.peoplecore.document.infrastructure.storage.PrivateDocumentStorage;
@@ -28,6 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @Tag("postgres")
@@ -59,7 +62,7 @@ class DocumentVerificationPostgresTest {
                 }
             });
             when(scanner.scan(any(), anyString(), anyLong())).thenThrow(new IOException("Scanner timed out"));
-            var worker = new DocumentVerificationWorker(runtime, new DataSourceTransactionManager(runtime.getDataSource()),
+            var worker = new DocumentVerificationWorker(new JdbcDocumentVerificationRepository(runtime), new DataSourceTransactionManager(runtime.getDataSource()),
                 storage, scanner, (source, type, size, sha) -> { }, Duration.ofMinutes(5));
             try {
                 for (int i = 0; i < 8; i++) {
@@ -132,7 +135,7 @@ class DocumentVerificationPostgresTest {
     }
 
     private static DocumentVerificationWorker worker(JdbcTemplate runtime) {
-        return new DocumentVerificationWorker(runtime, new DataSourceTransactionManager(runtime.getDataSource()),
+        return new DocumentVerificationWorker(new JdbcDocumentVerificationRepository(runtime), new DataSourceTransactionManager(runtime.getDataSource()),
             mock(PrivateDocumentStorage.class), mock(ClamAvScanner.class), (source, type, size, sha) -> { }, Duration.ofMinutes(5));
     }
 
@@ -154,7 +157,7 @@ class DocumentVerificationPostgresTest {
             when(storage.openCandidate(any())).thenAnswer(invocation -> new ByteArrayInputStream(new byte[] {1}));
             when(scanner.scan(any(), anyString(), anyLong())).thenReturn(new ClamAvScanner.Result(
                 new DocumentContentInspector.Result("application/pdf", 1, "a".repeat(64)), "engine", "definitions"));
-            var worker = new DocumentVerificationWorker(runtime, new DataSourceTransactionManager(runtime.getDataSource()),
+            var worker = new DocumentVerificationWorker(new JdbcDocumentVerificationRepository(runtime), new DataSourceTransactionManager(runtime.getDataSource()),
                 storage, scanner, (source, type, size, sha) -> { }, Duration.ofMinutes(5));
 
             assertTrue(worker.verifyNext());
@@ -181,7 +184,7 @@ class DocumentVerificationPostgresTest {
             when(storage.openCandidate(any())).thenAnswer(invocation -> new ByteArrayInputStream(new byte[] {1}));
             when(scanner.scan(any(), anyString(), anyLong())).thenReturn(new ClamAvScanner.Result(
                 new DocumentContentInspector.Result("application/pdf", 1, "a".repeat(64)), "engine", "definitions"));
-            var worker = new DocumentVerificationWorker(runtime, new DataSourceTransactionManager(runtime.getDataSource()),
+            var worker = new DocumentVerificationWorker(new JdbcDocumentVerificationRepository(runtime), new DataSourceTransactionManager(runtime.getDataSource()),
                 storage, scanner, (source, type, size, sha) -> {
                     throw new DocumentContentInspector.InvalidDocumentContentException("Invalid file format");
                 }, Duration.ofMinutes(5));
@@ -189,6 +192,8 @@ class DocumentVerificationPostgresTest {
             assertTrue(worker.verifyNext());
             assertEquals("REJECTED", runtime.queryForObject("select status from private_document where id=?", String.class, document));
             assertEquals(0, runtime.queryForObject("select count(id) from document_version where document_id=?", Integer.class, document));
+            verify(storage).deleteCandidate(runtime.queryForObject(
+                "select public_id from document_verification_attempt where id=?", UUID.class, attempt));
         }
     }
 

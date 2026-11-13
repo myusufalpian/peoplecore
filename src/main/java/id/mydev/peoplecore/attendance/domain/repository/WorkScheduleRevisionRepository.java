@@ -8,9 +8,11 @@ import jakarta.persistence.LockModeType;
 
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 public interface WorkScheduleRevisionRepository extends JpaRepository<WorkScheduleRevision, Long> {
-    org.springframework.data.domain.Page<WorkScheduleRevision> findByStatus(String status, org.springframework.data.domain.Pageable pageable);
+    Page<WorkScheduleRevision> findByStatus(String status, Pageable pageable);
 
     Optional<WorkScheduleRevision> findByPublicId(UUID publicId);
 

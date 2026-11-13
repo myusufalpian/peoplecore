@@ -52,6 +52,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @SpringBootTest(properties = {
     "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -103,7 +105,7 @@ class EnrollmentServiceJpaTest {
 
     @AfterEach
     void clearCaller() {
-        org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        SecurityContextHolder.clearContext();
     }
 
     private IssuedInvitation issueFresh() {
@@ -287,7 +289,7 @@ class EnrollmentServiceJpaTest {
 
         EnrollmentInvitation resurrected = invitationRepository
             .findByPublicId(pending.result().invitationId()).orElseThrow();
-        org.springframework.test.util.ReflectionTestUtils.setField(resurrected, "status",
+        ReflectionTestUtils.setField(resurrected, "status",
             EnrollmentInvitation.STATUS_ISSUED);
         invitationRepository.save(resurrected);
         assertThrows(InvitationConflictException.class, () -> enrollments.activate(

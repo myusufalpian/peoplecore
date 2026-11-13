@@ -1,16 +1,24 @@
 package id.mydev.peoplecore.identity.application.policy;
 
+import id.mydev.peoplecore.attendance.application.command.AttendanceCommands;
 import id.mydev.peoplecore.common.command.CommandExecutionService.CommandContext;
 import id.mydev.peoplecore.common.security.CurrentAccessPolicy;
+import id.mydev.peoplecore.document.application.command.DocumentCommands;
+import id.mydev.peoplecore.document.application.command.DocumentDeletionCommands;
+import id.mydev.peoplecore.document.application.command.DocumentHoldCommands;
 import id.mydev.peoplecore.identity.application.mapper.JwtIdentityMapper;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.application.service.EnrollmentService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
+import id.mydev.peoplecore.leave.application.service.LeaveWorkflowService;
+import id.mydev.peoplecore.payslip.application.PayslipService;
+import id.mydev.peoplecore.reimbursement.application.service.ReimbursementWorkflowService;
 import id.mydev.peoplecore.approval.application.service.ApprovalRuleService;
 import id.mydev.peoplecore.organization.application.service.EmployeeService;
 import id.mydev.peoplecore.organization.application.service.ProfileProposalService;
 import id.mydev.peoplecore.organization.application.service.ProfileProposalService.ReplaySnapshot;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -83,8 +91,6 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         "ATTENDANCE_CORRECTION_ROUTE_RETRY",
         "ATTENDANCE_RULE_PUBLISH",
         "ATTENDANCE_RULE_ACTIVATE");
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.attendance.application.command.AttendanceCommands> attendanceCommands;
 
     private static final Set<String> LEAVE_WORKFLOW_COMMANDS = Set.of(
         "LEAVE_REQUEST_CREATE",
@@ -106,26 +112,22 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         "LEAVE_CANCELLATION_RETRY_ROUTE",
         "LEAVE_RULE_PUBLISH",
         "LEAVE_RULE_ACTIVATE");
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.leave.application.service.LeaveWorkflowService> leaveWorkflows;
 
     private static final Set<String> PAYSLIP_COMMANDS = Set.of(
         "PAYSLIP_BATCH_CREATE", "PAYSLIP_BATCH_EDIT", "PAYSLIP_BATCH_REVIEW", "PAYSLIP_BATCH_PUBLISH");
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.payslip.application.PayslipService> payslips;
 
     private static final Set<String> REIMBURSEMENT_COMMANDS = Set.of(
         "REIMBURSEMENT_CREATE", "REIMBURSEMENT_EDIT", "REIMBURSEMENT_SUBMIT", "REIMBURSEMENT_RESUBMIT",
         "REIMBURSEMENT_WITHDRAW", "REIMBURSEMENT_REASSIGN", "REIMBURSEMENT_RETRY_ROUTE",
         "REIMBURSEMENT_APPROVE", "REIMBURSEMENT_REJECT", "REIMBURSEMENT_RETURN",
         "REIMBURSEMENT_RECORD_PAYMENT", "REIMBURSEMENT_CORRECT_PAYMENT", "REIMBURSEMENT_CATEGORY_PUBLISH");
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.reimbursement.application.service.ReimbursementWorkflowService> reimbursements;
 
     private static final Set<String> DOCUMENT_COMMANDS = Set.of(
         "DOCUMENT_CREATE", "DOCUMENT_RESERVE_UPLOAD", "DOCUMENT_FINALIZE");
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.beans.factory.ObjectProvider<id.mydev.peoplecore.document.application.command.DocumentCommands> documents;
+    private static final Set<String> DOCUMENT_HOLD_COMMANDS = Set.of(
+        "DOCUMENT_HOLD_PLACE", "DOCUMENT_HOLD_RELEASE");
+    private static final Set<String> DOCUMENT_DELETION_COMMANDS = Set.of(
+        "DOCUMENT_DELETE_CLAIM", "DOCUMENT_DELETE_RESTORE");
 
     private final AccountAccessService access;
     private final EmployeeService employees;
@@ -134,10 +136,24 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
     private final ApprovalRuleService approvalRules;
     private final ObjectMapper mapper;
     private final Clock clock;
+    private final ObjectProvider<AttendanceCommands> attendanceCommands;
+    private final ObjectProvider<LeaveWorkflowService> leaveWorkflows;
+    private final ObjectProvider<PayslipService> payslips;
+    private final ObjectProvider<ReimbursementWorkflowService> reimbursements;
+    private final ObjectProvider<DocumentHoldCommands> documentHolds;
+    private final ObjectProvider<DocumentDeletionCommands> documentDeletions;
+    private final ObjectProvider<DocumentCommands> documents;
 
     public HrisAccessPolicy(AccountAccessService access, EmployeeService employees,
                             EnrollmentService enrollments, ProfileProposalService proposals,
-                            ApprovalRuleService approvalRules, ObjectMapper mapper, Clock clock) {
+                            ApprovalRuleService approvalRules, ObjectMapper mapper, Clock clock,
+                            ObjectProvider<AttendanceCommands> attendanceCommands,
+                            ObjectProvider<LeaveWorkflowService> leaveWorkflows,
+                            ObjectProvider<PayslipService> payslips,
+                            ObjectProvider<ReimbursementWorkflowService> reimbursements,
+                            ObjectProvider<DocumentHoldCommands> documentHolds,
+                            ObjectProvider<DocumentDeletionCommands> documentDeletions,
+                            ObjectProvider<DocumentCommands> documents) {
         this.access = access;
         this.employees = employees;
         this.enrollments = enrollments;
@@ -145,6 +161,13 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         this.approvalRules = approvalRules;
         this.mapper = mapper;
         this.clock = clock;
+        this.attendanceCommands = attendanceCommands;
+        this.leaveWorkflows = leaveWorkflows;
+        this.payslips = payslips;
+        this.reimbursements = reimbursements;
+        this.documentHolds = documentHolds;
+        this.documentDeletions = documentDeletions;
+        this.documents = documents;
     }
 
     @Override
@@ -171,6 +194,14 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         }
         if (DOCUMENT_COMMANDS.contains(command.commandType())) {
             documents.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (DOCUMENT_HOLD_COMMANDS.contains(command.commandType())) {
+            documentHolds.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (DOCUMENT_DELETION_COMMANDS.contains(command.commandType())) {
+            documentDeletions.getObject().verifyCommand(command.commandType(), mapper.readTree(command.requestPayload()), caller);
             return;
         }
         if ("LEAVE_OPENING".equals(command.commandType()) || "LEAVE_ADJUSTMENT".equals(command.commandType())) {
@@ -255,6 +286,14 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
         }
         if (DOCUMENT_COMMANDS.contains(command.commandType())) {
             documents.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (DOCUMENT_HOLD_COMMANDS.contains(command.commandType())) {
+            documentHolds.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
+        if (DOCUMENT_DELETION_COMMANDS.contains(command.commandType())) {
+            documentDeletions.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()), caller);
             return;
         }
         if ("LEAVE_OPENING".equals(command.commandType()) || "LEAVE_ADJUSTMENT".equals(command.commandType())) {

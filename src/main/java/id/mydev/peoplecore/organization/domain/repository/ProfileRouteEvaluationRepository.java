@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface ProfileRouteEvaluationRepository extends JpaRepository<ProfileRouteEvaluation, Long> {
-    List<ProfileRouteEvaluation> findByProposalIdOrderByEvaluatedAtDescIdDesc(Long proposalId, org.springframework.data.domain.Pageable pageable);
+    List<ProfileRouteEvaluation> findByProposalIdOrderByEvaluatedAtDescIdDesc(Long proposalId, Pageable pageable);
     long countByProposalId(Long proposalId);
     List<ProfileRouteEvaluation> findByProposalIdOrderByEvaluatedAtAsc(Long proposalId);
 

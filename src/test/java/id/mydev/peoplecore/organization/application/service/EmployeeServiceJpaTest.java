@@ -42,6 +42,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.identity.domain.model.AccountBinding;
 
 @SpringBootTest(properties = {
     "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -94,7 +95,7 @@ class EmployeeServiceJpaTest {
         Employee entity = employeeRepository.findByPublicId(ownEmployeeId).orElseThrow();
         entity.linkAccount(member.getId());
         employeeRepository.save(entity);
-        bindingRepository.save(new id.mydev.peoplecore.identity.domain.model.AccountBinding(
+        bindingRepository.save(new AccountBinding(
             entity.getId(), ownEmployeeId, member.getId(), ISSUER, "emp-1", NOW));
     }
 
@@ -213,7 +214,7 @@ class EmployeeServiceJpaTest {
         Employee own = employeeRepository.findByPublicId(ownEmployeeId).orElseThrow();
         own.linkAccount(bare.getId());
         employeeRepository.save(own);
-        bindingRepository.save(new id.mydev.peoplecore.identity.domain.model.AccountBinding(
+        bindingRepository.save(new AccountBinding(
             own.getId(), ownEmployeeId, bare.getId(), ISSUER, "bare-1", NOW));
         assertThrows(ResourceNotFoundException.class, () -> employees.get(ownEmployeeId, bareCaller));
         assertThrows(ResourceNotFoundException.class,

@@ -7,9 +7,10 @@ import org.springframework.data.jpa.repository.Query;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 
 public interface ProfileAssignmentRepository extends JpaRepository<ProfileAssignment, Long> {
-    List<ProfileAssignment> findByProposalIdOrderByIdAsc(Long proposalId, org.springframework.data.domain.Pageable pageable);
+    List<ProfileAssignment> findByProposalIdOrderByIdAsc(Long proposalId, Pageable pageable);
     long countByProposalId(Long proposalId);
     Optional<ProfileAssignment> findByPublicId(UUID publicId);
 

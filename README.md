@@ -1,6 +1,6 @@
 # Peoplecore Backend
 
-Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, reviewed contact-profile changes, attendance, and annual leave through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
+Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, reviewed contact-profile changes, attendance, annual leave, private documents, reimbursement, and payslip publication through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
 
 ## Technology stack
 
@@ -30,6 +30,9 @@ src/main/java/id/mydev/peoplecore/
 ├── organization/    employees, assignments, contact profiles, proposals, review history
 ├── attendance/      schedules, calendars, canonical occurrences, clock events, corrections
 ├── leave/           annual entitlements, ledger, request review, cancellation
+├── document/        private uploads, verification, streaming, legal hold, deletion and retry cleanup
+├── reimbursement/   effective categories, claims, review, payment records
+├── payslip/         reviewed batches, publication history, employee access
 └── infrastructure/  migrations, runtime database checks, and runtime configuration
 ```
 
@@ -37,13 +40,30 @@ The package layout follows the technical responsibility of each component. Busin
 
 ## Code conventions
 
-Use Java records for immutable API and value data where appropriate, constructor or method injection for dependencies, and explicit validation at input boundaries. Keep persistence access behind repository or service classes and keep mapping logic out of controllers. Use `Instant` for timestamps and `BigDecimal` for exact decimal values.
+Use Java records for immutable API and value data where appropriate, constructor or method injection for dependencies, and explicit validation at input boundaries. Keep SQL, JDBC access, and row mapping in repository adapters under infrastructure/persistence. Application services coordinate business rules and transaction boundaries through repository contracts; repository contracts and adapters must not depend on application models. Keep mapping logic out of controllers and use imports instead of fully qualified Java types and annotations. Use `Instant` and `LocalDate` at application boundaries; convert JDBC types inside persistence adapters. Use `BigDecimal` for exact decimal values where applicable; reimbursement amounts use positive whole-rupiah `long` values.
 
 The `leave` and `attendance` recording controllers expose their application command-result records directly as read models; this is the recorded exception documented in [architecture](architecture.md#system-shape). Request bodies still use `api` DTOs/mappers where present, and other modules keep the `api` mapping convention.
 
 HTTP errors are mapped centrally through `GlobalExceptionHandler`; controllers should raise the relevant typed exception instead of constructing ad-hoc error JSON. Security decisions belong in the access-policy and identity services and the Spring Security configuration. Audit records are written through the audit writer and are append-only at the database layer.
 
 Tests mirror the production package structure. Unit tests cover deterministic domain and infrastructure behavior, HTTP tests verify status codes and response contracts, and PostgreSQL-tagged tests verify migrations and database constraints against a real PostgreSQL instance.
+
+## Optional document and finance features
+
+Document, reimbursement, and payslip HTTP endpoints are disabled unless their feature flags are enabled:
+
+| Property | Behavior |
+|---|---|
+| `peoplecore.documents.enabled` | Upload metadata, upload authorization, finalization, document reads, content, and legal holds |
+| `peoplecore.documents.deletion.enabled` | Deletion/restore endpoints and scheduled cleanup; also requires documents enabled and storage for the scheduler |
+| `peoplecore.reimbursement.enabled` | Categories, claims, review, payment records, and claim-linked evidence |
+| `peoplecore.payslip.enabled` | Batch review/publication and employee publication lists |
+| `peoplecore.payslip.download.enabled` | Published payslip content; also requires payslips enabled |
+| `peoplecore.documents.transfer.enabled` | Revocable content transfer; requires explicit `max-concurrent`, `poll-interval`, and `check-timeout` settings |
+
+Storage-backed operations require configured private object storage. Verification also requires a trusted scanner and format verifier. Content download uses authenticated streaming with repeated authorization checks; validate cancellation and time limits on the actual server and gateway before enabling it in production. Validate scanner identity, loaded definitions, and freshness on the deployed scanner. A feature flag alone does not establish those properties.
+
+Deletion claims immediately block reads and can be restored before their deadline. Cleanup commits logical deletion and audit before storage I/O, then records `objects_purged_at` only after every candidate object is deleted. Storage failures remain retryable across restarts. Unfinished copies block object deletion until completion or explicit reconciliation; lease expiry alone does not prove the provider stopped writing. Keep cleanup disabled during recovery until restore and reconciliation are complete. See [document lifecycle](architecture.md#private-documents-reimbursement-and-payslips) for the storage and transaction boundaries.
 
 ## Runtime services
 
@@ -92,6 +112,8 @@ Proposal detail includes `availableActions` derived from current authority and s
 
 For `/api/v1/profile-proposals/{id}/history`, `page` selects revisions; `decisionPage`, `evaluationPage`, and `assignmentPage` independently select the other history collections. All pages are zero-based and share `size` (default 20, maximum 100). Metadata reports each collection total, allowing clients to retrieve history beyond the first page.
 
+Private document APIs use `/api/v1/documents`: create upload metadata, request a presigned upload URL, finalize verification, read status/content, manage legal holds, and claim/restore deletion. Reimbursement APIs use `/api/v1/reimbursement` for effective categories, claims, manager/Finance decisions, payment records, and authorized evidence reads. Payslip APIs use `/api/v1/payslips/batches` for reviewed publication and `/api/v1/payslips` for an employee's published documents. Publication records notification intent atomically; the API does not perform payroll calculation or funds transfer.
+
 Detailed behavior and HTTP examples are in [IMPLEMENTATION.md](IMPLEMENTATION.md); module and transaction boundaries are in [architecture.md](architecture.md).
 
 ## Running and verifying
@@ -107,7 +129,7 @@ export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
 docker compose --profile provision run --rm postgres-runtime-provision
 ```
 
-The provisioning script grants foundation, identity, organization, contact-profile, attendance and leave permissions, including append-only history and audit access. It revokes stale table and sequence privileges before re-granting, so rerun it with owner credentials after applying migrations; a runtime role provisioned only by an older script lacks the identity grants and cannot serve authenticated endpoints.
+The provisioning script grants foundation, identity, organization, contact-profile, attendance, leave, document, reimbursement, and payslip permissions, including append-only history and audit access. It revokes stale table and sequence privileges before re-granting, so rerun it with owner credentials after applying migrations; a runtime role provisioned only by an older script lacks the identity grants and cannot serve authenticated endpoints.
 
 Keep the existing audit-table permission limited to `SELECT, INSERT`. Provision initial accounts and role assignments through controlled owner-side administration; the API has no administrator bootstrap endpoint.
 
@@ -144,7 +166,7 @@ Correction routing is published and activated through `/api/v1/approval/attendan
 
 Apply migrations using owner credentials before rerunning `local/postgres/provision-runtime.sql` for runtime grants. V14 supplies context storage, V15 seals assignment provenance, and V16–V18 define attendance recording, entitlement and leave workflow storage. All application instances must participate in the shared `profile-admission` protocol to coordinate context and authority changes with reads and commands. See [architecture](architecture.md#attendance-and-annual-leave) for admission ordering and canonical evidence.
 
-Security artifacts include `*-all-severities.json`, the HIGH/CRITICAL gate report, and `*-review.json` with remediation ownership/decision status. Review lower-severity results even when the gate passes.
+Security artifacts include `*-all-severities.json`, the HIGH/CRITICAL scan result, and `*-review.json` with vulnerability dispositions. Inspect lower-severity results even when the configured threshold passes.
 
 ### Local image security checks
 
@@ -159,4 +181,4 @@ python3 -m unittest discover -s local/security -p 'test_*.py'
 bash local/security/check.sh
 ```
 
-The scanner defaults to `trivy`; set `TRIVY_BIN` to use another executable path and `SECURITY_REPORT_DIR` to change the report directory. `local/security/check.sh` produces backend/image SBOMs, verifies the SQS runtime JAR inventory, scans every severity, and confirms that a vulnerable fixture fails the HIGH/CRITICAL gate. The `Backend checks` workflow runs the Gradle checks, local service contract checks, and security scans, then uploads their reports.
+The scanner defaults to `trivy`; set `TRIVY_BIN` to use another executable path and `SECURITY_REPORT_DIR` to change the report directory. `local/security/check.sh` produces backend/image SBOMs, verifies the SQS runtime JAR inventory, scans every severity, and confirms that a vulnerable fixture fails the HIGH/CRITICAL threshold. The `Backend checks` workflow runs the Gradle checks, local service contract checks, and security scans, then uploads their reports.

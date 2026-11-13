@@ -16,6 +16,7 @@ import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
+import org.springframework.security.web.AuthenticationEntryPoint;
 
 @Configuration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -23,7 +24,7 @@ public class ApiSecurityConfig {
     @Bean
     SecurityFilterChain apiSecurity(HttpSecurity http, ObjectMapper mapper, RequestBodyLimitFilter bodyFilter,
                                     ObjectProvider<JwtDecoder> decoders) throws Exception {
-        var entryPoint = (org.springframework.security.web.AuthenticationEntryPoint) (request, response, ex) -> {
+        var entryPoint = (AuthenticationEntryPoint) (request, response, ex) -> {
             String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
             String challenge = authorization != null && authorization.startsWith("Bearer ")
                 ? "Bearer" : "Basic realm=\"Peoplecore\"";

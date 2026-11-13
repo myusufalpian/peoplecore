@@ -55,6 +55,23 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.attendance.domain.model.EmployeeCalendarAssignment;
+import id.mydev.peoplecore.attendance.domain.model.EmployeeScheduleAssignment;
+import id.mydev.peoplecore.attendance.domain.model.HolidayCalendarRevision;
+import id.mydev.peoplecore.attendance.domain.model.WorkScheduleRevision;
+import id.mydev.peoplecore.attendance.domain.repository.AttendanceOccurrenceRepository;
+import id.mydev.peoplecore.attendance.domain.repository.EmployeeCalendarAssignmentRepository;
+import id.mydev.peoplecore.attendance.domain.repository.EmployeeScheduleAssignmentRepository;
+import id.mydev.peoplecore.attendance.domain.repository.HolidayCalendarRevisionRepository;
+import id.mydev.peoplecore.attendance.domain.repository.HolidayDateRepository;
+import id.mydev.peoplecore.attendance.domain.repository.WorkScheduleDayRepository;
+import id.mydev.peoplecore.attendance.domain.repository.WorkScheduleRevisionRepository;
+import id.mydev.peoplecore.common.api.InvalidPaginationException;
+import id.mydev.peoplecore.identity.application.service.AccountAccessService;
+import jakarta.persistence.EntityManager;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 
 @SpringBootTest(properties = {
     "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -74,7 +91,7 @@ class WorkCalendarServiceTest {
         @Bean
         @Primary
         Clock fixedClock() {
-            return Clock.fixed(NOW, java.time.ZoneOffset.UTC);
+            return Clock.fixed(NOW, ZoneOffset.UTC);
         }
     }
 
@@ -87,16 +104,16 @@ class WorkCalendarServiceTest {
     @Autowired AccountBindingRepository bindingRepository;
     @Autowired AdmissionGuard admission;
     @Autowired JdbcTemplate jdbc;
-    @Autowired jakarta.persistence.EntityManager entityManager;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.WorkScheduleRevisionRepository scheduleRevisionRepository;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.HolidayCalendarRevisionRepository calendarRevisionRepository;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.WorkScheduleDayRepository scheduleDayRepository;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.EmployeeScheduleAssignmentRepository scheduleAssignmentRepository;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.EmployeeCalendarAssignmentRepository calendarAssignmentRepository;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.AttendanceOccurrenceRepository occurrenceRepository;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.HolidayDateRepository holidayDateRepository;
+    @Autowired EntityManager entityManager;
+    @Autowired WorkScheduleRevisionRepository scheduleRevisionRepository;
+    @Autowired HolidayCalendarRevisionRepository calendarRevisionRepository;
+    @Autowired WorkScheduleDayRepository scheduleDayRepository;
+    @Autowired EmployeeScheduleAssignmentRepository scheduleAssignmentRepository;
+    @Autowired EmployeeCalendarAssignmentRepository calendarAssignmentRepository;
+    @Autowired AttendanceOccurrenceRepository occurrenceRepository;
+    @Autowired HolidayDateRepository holidayDateRepository;
     @Autowired AttendanceAccountGuard accountGuard;
-    @Autowired id.mydev.peoplecore.identity.application.service.AccountAccessService access;
+    @Autowired AccountAccessService access;
 
     private Authentication hrCaller;
     private Authentication scopedCaller;
@@ -156,10 +173,10 @@ class WorkCalendarServiceTest {
 
     @Test
     void revisionCatalogValidatesPaginationAndHidesDrafts() {
-        scheduleRevisionRepository.saveAndFlush(new id.mydev.peoplecore.attendance.domain.model.WorkScheduleRevision(
+        scheduleRevisionRepository.saveAndFlush(new WorkScheduleRevision(
             UUID.randomUUID(), "Asia/Jakarta", NOW));
         assertTrue(revisionQueries.schedules(hrCaller, 0, 20).data().isEmpty());
-        assertThrows(id.mydev.peoplecore.common.api.InvalidPaginationException.class,
+        assertThrows(InvalidPaginationException.class,
             () -> revisionQueries.schedules(hrCaller, 0, 101));
     }
 
@@ -545,7 +562,7 @@ class WorkCalendarServiceTest {
     @Test
     void assignRejectsDraftRevision() {
         UUID draftId = UUID.randomUUID();
-        scheduleRevisionRepository.save(new id.mydev.peoplecore.attendance.domain.model.WorkScheduleRevision(
+        scheduleRevisionRepository.save(new WorkScheduleRevision(
             draftId, "Asia/Jakarta", NOW));
         WorkContextException ex = assertThrows(WorkContextException.class,
             () -> calendars.assignSchedule(assignPayload(employeePublicId, draftId,
@@ -557,7 +574,7 @@ class WorkCalendarServiceTest {
     void assignCalendarRejectsDraftRevision() {
         UUID draftId = UUID.randomUUID();
         calendarRevisionRepository.save(
-            new id.mydev.peoplecore.attendance.domain.model.HolidayCalendarRevision(
+            new HolidayCalendarRevision(
                 draftId, "JKT", NOW));
         WorkContextException ex = assertThrows(WorkContextException.class,
             () -> calendars.assignCalendar(assignPayload(employeePublicId, draftId,
@@ -583,7 +600,7 @@ class WorkCalendarServiceTest {
         assertThrows(IllegalArgumentException.class, () -> calendars.previewImpact(new PreviewPayload(
             null, null, LocalDate.of(2026, 1, 1), LocalDate.of(2027, 6, 1),
             List.of(employeePublicId), null, null), hrCaller));
-        List<UUID> tooMany = new java.util.ArrayList<>();
+        List<UUID> tooMany = new ArrayList<>();
         for (int index = 0; index < 501; index++) {
             tooMany.add(UUID.randomUUID());
         }
@@ -614,7 +631,7 @@ class WorkCalendarServiceTest {
         Long internalId = employeeRepository.findByPublicId(employeePublicId).orElseThrow().getId();
         Long revisionId = scheduleRevisionRepository.findByPublicId(scheduleId).orElseThrow().getId();
         scheduleAssignmentRepository.save(
-            new id.mydev.peoplecore.attendance.domain.model.EmployeeScheduleAssignment(UUID.randomUUID(),
+            new EmployeeScheduleAssignment(UUID.randomUUID(),
                 internalId, revisionId, LocalDate.of(2026, 10, 12), null, NOW, null, null));
 
         OccurrenceListResult listed = calendars.queryOccurrences(employeePublicId,
@@ -632,7 +649,7 @@ class WorkCalendarServiceTest {
         Long internalId = employeeRepository.findByPublicId(employeePublicId).orElseThrow().getId();
         Long revisionId = calendarRevisionRepository.findByPublicId(calendarId).orElseThrow().getId();
         calendarAssignmentRepository.save(
-            new id.mydev.peoplecore.attendance.domain.model.EmployeeCalendarAssignment(UUID.randomUUID(),
+            new EmployeeCalendarAssignment(UUID.randomUUID(),
                 internalId, revisionId, LocalDate.of(2026, 10, 12), null, NOW, null, null));
 
         OccurrenceListResult listed = calendars.queryOccurrences(employeePublicId,
@@ -643,7 +660,7 @@ class WorkCalendarServiceTest {
     @Test
     void queryReportsSeededUnpublishedRevision() {
         UUID draftId = UUID.randomUUID();
-        scheduleRevisionRepository.save(new id.mydev.peoplecore.attendance.domain.model.WorkScheduleRevision(
+        scheduleRevisionRepository.save(new WorkScheduleRevision(
             draftId, "Asia/Jakarta", NOW));
         Long draftInternalId = scheduleRevisionRepository.findByPublicId(draftId).orElseThrow().getId();
         UUID calendarId = calendars.publishCalendar(
@@ -651,7 +668,7 @@ class WorkCalendarServiceTest {
         assignCalendar(employeePublicId, calendarId, LocalDate.of(2026, 10, 8), scopedCaller);
         Long internalId = employeeRepository.findByPublicId(employeePublicId).orElseThrow().getId();
         scheduleAssignmentRepository.save(
-            new id.mydev.peoplecore.attendance.domain.model.EmployeeScheduleAssignment(UUID.randomUUID(),
+            new EmployeeScheduleAssignment(UUID.randomUUID(),
                 internalId, draftInternalId, LocalDate.of(2026, 10, 8), null, NOW, null, null));
 
         OccurrenceListResult listed = calendars.queryOccurrences(employeePublicId,
@@ -661,8 +678,8 @@ class WorkCalendarServiceTest {
 
     @Test
     void queryReportsSeededInvalidTimezone() {
-        id.mydev.peoplecore.attendance.domain.model.WorkScheduleRevision revision =
-            new id.mydev.peoplecore.attendance.domain.model.WorkScheduleRevision(
+        WorkScheduleRevision revision =
+            new WorkScheduleRevision(
                 UUID.randomUUID(), "Mars/Olympus", NOW);
         scheduleRevisionRepository.save(revision);
         revision.publish(NOW);
@@ -672,7 +689,7 @@ class WorkCalendarServiceTest {
         assignCalendar(employeePublicId, calendarId, LocalDate.of(2026, 10, 8), scopedCaller);
         Long internalId = employeeRepository.findByPublicId(employeePublicId).orElseThrow().getId();
         scheduleAssignmentRepository.save(
-            new id.mydev.peoplecore.attendance.domain.model.EmployeeScheduleAssignment(UUID.randomUUID(),
+            new EmployeeScheduleAssignment(UUID.randomUUID(),
                 internalId, revision.getId(), LocalDate.of(2026, 10, 8), null, NOW, null, null));
 
         OccurrenceListResult listed = calendars.queryOccurrences(employeePublicId,
@@ -700,12 +717,12 @@ class WorkCalendarServiceTest {
         employees.addAssignment(neighborPublicId, UUID.randomUUID(), "ENG", null, "STAFF",
             NOW.minusSeconds(3600), null, hrCaller);
         UUID draftId = UUID.randomUUID();
-        scheduleRevisionRepository.save(new id.mydev.peoplecore.attendance.domain.model.WorkScheduleRevision(
+        scheduleRevisionRepository.save(new WorkScheduleRevision(
             draftId, "Asia/Jakarta", NOW));
         Long draftInternalId = scheduleRevisionRepository.findByPublicId(draftId).orElseThrow().getId();
         Long internalId = employeeRepository.findByPublicId(neighborPublicId).orElseThrow().getId();
         scheduleAssignmentRepository.save(
-            new id.mydev.peoplecore.attendance.domain.model.EmployeeScheduleAssignment(UUID.randomUUID(),
+            new EmployeeScheduleAssignment(UUID.randomUUID(),
                 internalId, draftInternalId, LocalDate.of(2026, 10, 8), LocalDate.of(2026, 10, 13),
                 NOW, null, null));
         UUID scheduleId = publishWeekdays();
@@ -1332,7 +1349,7 @@ class WorkCalendarServiceTest {
             List.of(employeePublicId), null, null), hrCaller));
     }
 
-    private WorkCalendarService serviceWithClock(java.time.Clock clock) {
+    private WorkCalendarService serviceWithClock(Clock clock) {
         return new WorkCalendarService(scheduleRevisionRepository, scheduleDayRepository,
             calendarRevisionRepository, holidayDateRepository, scheduleAssignmentRepository,
             calendarAssignmentRepository, occurrenceRepository, accountGuard, resolver, employees,
@@ -1343,7 +1360,7 @@ class WorkCalendarServiceTest {
         return new StepClock(NOW, NOW.plusSeconds(2));
     }
 
-    private static final class StepClock extends java.time.Clock {
+    private static final class StepClock extends Clock {
         private final Instant first;
         private final Instant later;
         private int calls;
@@ -1354,12 +1371,12 @@ class WorkCalendarServiceTest {
         }
 
         @Override
-        public java.time.ZoneId getZone() {
-            return java.time.ZoneOffset.UTC;
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
         }
 
         @Override
-        public java.time.Clock withZone(java.time.ZoneId zone) {
+        public Clock withZone(ZoneId zone) {
             return this;
         }
 
@@ -1373,7 +1390,7 @@ class WorkCalendarServiceTest {
     void publishScheduleRejectsEmptyOrOversizedDays() {
         assertThrows(IllegalArgumentException.class, () -> calendars.publishSchedule(
             new PublishSchedulePayload(UUID.randomUUID(), "Asia/Jakarta", List.of()), hrCaller));
-        List<ScheduleDayPayload> eight = new java.util.ArrayList<>(weekdaySchedule());
+        List<ScheduleDayPayload> eight = new ArrayList<>(weekdaySchedule());
         eight.add(new ScheduleDayPayload(6, LocalTime.of(9, 0), LocalTime.of(17, 0), 0));
         eight.add(new ScheduleDayPayload(7, LocalTime.of(9, 0), LocalTime.of(17, 0), 0));
         eight.add(new ScheduleDayPayload(1, LocalTime.of(9, 0), LocalTime.of(17, 0), 0));

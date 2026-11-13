@@ -2,21 +2,24 @@ package id.mydev.peoplecore.document.infrastructure.config;
 
 import id.mydev.peoplecore.document.application.service.DocumentVerificationWorker;
 import id.mydev.peoplecore.document.application.service.DocumentFormatVerifier;
+import id.mydev.peoplecore.document.domain.exception.DocumentVerificationException;
 import id.mydev.peoplecore.document.infrastructure.scanner.ClamAvScanner;
 import id.mydev.peoplecore.document.infrastructure.storage.PrivateDocumentStorage;
 import java.io.IOException;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.jdbc.core.JdbcTemplate;
+import id.mydev.peoplecore.document.domain.repository.DocumentVerificationRepository;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doReturn;
 
 class DocumentVerificationSchedulerTest {
     @Test
@@ -31,7 +34,7 @@ class DocumentVerificationSchedulerTest {
     @Test
     void schedulerIsAvailableWhenEveryDependencyAndTimingIsConfigured() {
         new ApplicationContextRunner().withUserConfiguration(DocumentVerificationConfig.class)
-            .withBean(JdbcTemplate.class, () -> mock(JdbcTemplate.class))
+            .withBean(DocumentVerificationRepository.class, () -> mock(DocumentVerificationRepository.class))
             .withBean(PlatformTransactionManager.class, () -> mock(PlatformTransactionManager.class))
             .withBean(PrivateDocumentStorage.class, () -> mock(PrivateDocumentStorage.class))
             .withBean(ClamAvScanner.class, () -> mock(ClamAvScanner.class))
@@ -58,6 +61,18 @@ class DocumentVerificationSchedulerTest {
         when(worker.verifyNext()).thenThrow(new IOException("unavailable"));
         new DocumentVerificationScheduler(worker, Duration.ofMinutes(1), Duration.ofSeconds(1)).poll();
         verify(worker).verifyNext();
+    }
+
+    @Test
+    void domainVerificationFailuresDoNotEscapeTheScheduledPoll() throws IOException {
+        DocumentVerificationWorker worker = mock(DocumentVerificationWorker.class);
+        var scheduler = new DocumentVerificationScheduler(worker, Duration.ofMinutes(1), Duration.ofSeconds(1));
+        when(worker.recoverNext(Duration.ofMinutes(1)))
+            .thenThrow(new DocumentVerificationException("Document verification recovery failed"));
+        assertDoesNotThrow(scheduler::poll);
+        doReturn(false).when(worker).recoverNext(Duration.ofMinutes(1));
+        when(worker.verifyNext()).thenThrow(new DocumentVerificationException("Document verification lease expired"));
+        assertDoesNotThrow(scheduler::poll);
     }
 
     @Test

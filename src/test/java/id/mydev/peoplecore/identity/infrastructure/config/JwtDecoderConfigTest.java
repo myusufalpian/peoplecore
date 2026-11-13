@@ -5,12 +5,15 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import id.mydev.peoplecore.identity.infrastructure.config.IdentityConfig;
+import id.mydev.peoplecore.identity.infrastructure.config.SecurityJwtConfig;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 
 class JwtDecoderConfigTest {
 
     private static final AutoConfigurations CONFIGURATIONS = AutoConfigurations.of(
-        id.mydev.peoplecore.identity.infrastructure.config.SecurityJwtConfig.class,
-        id.mydev.peoplecore.identity.infrastructure.config.IdentityConfig.class);
+        SecurityJwtConfig.class,
+        IdentityConfig.class);
 
     @Test
     void decoderRequiresCompleteConfiguration() {
@@ -31,6 +34,6 @@ class JwtDecoderConfigTest {
                 "peoplecore.security.jwt.audience=hris-api",
                 "peoplecore.security.jwt.jwks-uri=https://idp.example/.well-known/jwks.json")
             .run(context -> assertThat(context).hasNotFailed()
-                .hasSingleBean(org.springframework.security.oauth2.jwt.JwtDecoder.class));
+                .hasSingleBean(JwtDecoder.class));
     }
 }
