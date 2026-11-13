@@ -1,8 +1,8 @@
 # Implementation Overview
 
-Peoplecore implements employee records, effective-dated organization assignments, identity enrollment, and reviewed contact-profile changes on a Spring Boot backend. PostgreSQL stores domain state, command receipts, append-only audit records, and pending outbox events. Public API references use UUIDs.
+Peoplecore implements employee records, effective-dated organization assignments, identity enrollment, reviewed contact-profile changes, attendance, leave, private documents, reimbursement, and payslip publication on a Spring Boot backend. PostgreSQL stores domain state, command receipts, append-only audit records, and pending outbox events. Public API references use UUIDs.
 
-## Delivered capabilities
+## Implemented capabilities
 
 - Employee creation, employee-number changes, and employment start/end date updates.
 - Organization assignments with a unit, job level, optional manager public UUID, and a start-inclusive/end-exclusive interval.
@@ -11,7 +11,7 @@ Peoplecore implements employee records, effective-dated organization assignments
 - JWT signature, issuer, expiration, and audience validation, followed by live account, role, binding, and organization-scope checks.
 - Typed success/error responses, centralized exception mapping, correlation IDs, bounded JSON input, and CSRF protection for applicable requests.
 - Canonical request hashing, idempotency receipts, PostgreSQL advisory locks, and atomic domain/receipt/audit/outbox writes.
-- Explicit Flyway migrations, schema validation, runtime database-role checks, dependency inventories, and vulnerability-gate tooling.
+- Explicit Flyway migrations, schema validation, runtime database-role checks, dependency inventories, and vulnerability scanning thresholds.
 - Bounded profile-rule publication, organization-wide global activation, and shared preview/submission evaluation with a designated HR reviewer.
 - Employee-owned proposals, separate active contact values, return/edit/resubmit, reasoned HR decisions/reassignment, and explicit blocked-route recovery.
 - Database-sealed content, touched-field conflict counters, scoped queues/history, current receipt authorization, and atomic approval/application.
@@ -20,6 +20,9 @@ Peoplecore implements employee records, effective-dated organization assignments
 - Annual leave openings and signed adjustments in integer half units, with reservation, exact consumption and single reversal.
 - Manager-then-designated-HR leave requests, blocked-route recovery, whole cancellation, and scoped balance, ledger and portion summaries.
 - Typed attendance and leave rule sets with separate publication and activation, plus advisory route preview.
+- Private document staging uploads, leased verification, immutable verified versions, authorized streaming, legal holds, and retryable object cleanup.
+- Effective-dated reimbursement categories, sealed evidence revisions, manager/Finance decisions, and payment history.
+- Reviewed payslip batches, immutable publication history, and one current publication per employee and month.
 
 HTTP DTO mappers, application result mappers, and audit/outbox trail mappers keep representation logic separate from mutation services.
 
@@ -255,11 +258,83 @@ Paths are under `/api/v1`. Quantities are integer half units; a full day is two 
 
 Requests cover one calendar year: either a `FULL` range of scheduled non-holiday dates or a single `FIRST_HALF`/`SECOND_HALF` date, submitted before the first occurrence starts. Submission reserves available capacity and captures canonical work context; blocked pending routes still hold the reservation. Approval advances manager then designated HR, and only the final HR step consumes the reservation. Return, rejection and withdrawal release only their own effects, and resubmission restarts both steps with fresh organization context. Cancellation is whole: pending, rejected or withdrawn cancellations keep the original consumption, and an approved one reverses it exactly once.
 
+## Private documents
+
+Document routes are enabled with `peoplecore.documents.enabled=true`. Creation, upload URL reservation, and finalization additionally require a configured verification scheduler; otherwise they return `503`. Storage requires endpoint, bucket, region, API timeout and attempt timeout under `peoplecore.documents.storage`. Verification requires `lease`, `poll-interval`, and `retry-delay` under `peoplecore.documents.verification`, plus storage, format verification, scanner, and independently supplied scanner-readiness dependencies.
+
+| Method | Path | Request / purpose |
+| --- | --- | --- |
+| POST | `/api/v1/documents/uploads` | `employeeId`, `purpose`, `fileName`, `mediaType`, `byteSize`; creates metadata, 201 |
+| POST | `/api/v1/documents/{id}/upload-url` | No JSON body; reserves a staging upload and returns a temporary upload URL with `no-store` |
+| POST | `/api/v1/documents/{id}/finalize` | No JSON body; validates the uploaded object and queues verification |
+| GET | `/api/v1/documents/{id}` | Authorized metadata/status, `no-store` |
+| GET | `/api/v1/documents/{id}/content` | Streams the owner's verified claim evidence |
+| GET, POST | `/api/v1/documents/{id}/holds` | Reads holds or creates a scoped-HR legal hold with `reason` |
+| GET | `/api/v1/documents/{id}/holds/{holdId}` | Reads a specific hold |
+| POST | `/api/v1/documents/{id}/holds/{holdId}/release` | Releases a hold with `reason` |
+| GET, POST | `/api/v1/documents/{id}/deletion` | Reads deletion state or claims deletion |
+| POST | `/api/v1/documents/{id}/deletion/restore` | Restores a claim before its deadline and logical deletion |
+
+Purposes are `CLAIM_EVIDENCE` and `PAYSLIP`. The maximum declared size is 10 MiB; accepted content is PDF, with JPEG/PNG also accepted for claim evidence. Direct presigned uploads go to staging; provider-side limits and staging-object lifecycle remain necessary because the API does not proxy that upload body. Finalization does not itself mark bytes verified. Each copy attempt has a unique candidate key; verification commits only for the current valid lease and checked candidate bytes.
+
+Create claim-evidence metadata using a real employee UUID:
+
+```bash
+curl --fail-with-body -X POST http://localhost:8080/api/v1/documents/uploads \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: receipt-upload-1' \
+  --data "{\"employeeId\":\"$EMPLOYEE_ID\",\"purpose\":\"CLAIM_EVIDENCE\",\"fileName\":\"receipt.pdf\",\"mediaType\":\"application/pdf\",\"byteSize\":1234}"
+```
+
+Reserve an upload URL using the returned document UUID, PUT the matching bytes to that URL, then finalize with a distinct idempotency key. Poll metadata for verification status; do not use an upload acknowledgement as proof of verified content.
+
+Deletion endpoints and the scheduler additionally require `peoplecore.documents.deletion.enabled=true`. Claims immediately block reads and new references. Active legal holds, sealed reimbursement evidence, and reviewed/published payslip references prevent deletion. The restore window defaults to `PT720H` through `peoplecore.documents.deletion.restore-window`.
+
+The purge worker atomically commits logical deletion and its audit before storage I/O. V27 tracks physical cleanup separately using `objects_purged_at`: a deleted row without that timestamp remains pending across crashes or storage failures. Before deleting any candidate, the worker requires every started copy to have recorded completion. Copy start locks the parent before the attempt and cannot begin after deletion is claimed. Lease expiry or abandonment does not establish that an external write stopped; uncertain copies remain pending for provider reconciliation. Such deleted rows are excluded before the polling batch limit and become eligible automatically after completion is recorded. Successful deletion of every candidate permits a separately committed conditional acknowledgement; retries repeat idempotent deletes without duplicating the logical-deletion audit. This does not replace provider staging cleanup or backup/restore reconciliation.
+
+Content streaming requires `peoplecore.documents.transfer.enabled=true` with `max-concurrent`, `poll-interval`, and `check-timeout` under that prefix. Access is checked again during transfer; the deployment must establish its actual transport cancellation and buffered-byte bounds. Scanner definition authenticity/freshness, readiness evidence, and scanner restart/reload behavior must be established for the deployed scanner. Local doubles do not establish these properties.
+
+## Reimbursement and payslips
+
+Reimbursement endpoints require `peoplecore.reimbursement.enabled=true`. Routes below are under `/api/v1/reimbursement`; mutations require a verified JWT and `Idempotency-Key`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET, POST | `/categories` | Reads applicable categories using required `date` and optional `limit`/`cursor`, or publishes an effective-dated category |
+| POST | `/claims` | Creates an owner draft |
+| PATCH | `/claims/{id}` | Edits a draft using its expected version |
+| POST | `/claims/{id}/{action}` | Executes a permitted workflow action |
+| GET | `/claims`, `/claims/{id}`, `/claims/{id}/history` | Scoped queue, detail, and bounded history; list/history accept `limit`/`cursor` |
+| GET | `/claims/{id}/evidence/{documentId}/content` | Streams sealed evidence through current claim-read authorization |
+
+Submission captures a new immutable content, verified-evidence, category, organization, and route snapshot. Manager and Finance steps require distinct eligible nonself reviewers. Decisions recheck current authority, assignment, and expected version; return/resubmit creates fresh review context. Payment recording and correction append history without invoking an external payment provider.
+
+Payslip endpoints require `peoplecore.payslip.enabled=true`:
+
+| Method | Path | Request / purpose |
+| --- | --- | --- |
+| POST | `/api/v1/payslips/batches` | `items` containing `employeePublicId`, `period` (`YYYY-MM`), and `documentPublicId` |
+| PATCH | `/api/v1/payslips/batches/{id}` | `expectedRevision`, `draft` |
+| POST | `/api/v1/payslips/batches/{id}/review` | `expectedRevision`; seals the verified document-version mapping |
+| POST | `/api/v1/payslips/batches/{id}/publish` | `expectedRevision`; publishes only the current reviewed revision |
+| GET | `/api/v1/payslips/batches/{id}` | Authorized batch detail |
+| GET | `/api/v1/payslips` | Owner current publications, with `limit`/`cursor` |
+| GET | `/api/v1/payslips/{publicationId}/content` | Owner current publication content; additionally requires `peoplecore.payslip.download.enabled=true` |
+
+Publication serializes competing employee/period updates. History remains immutable while one current pointer selects the active publication. Publication, command receipt, audit, and outbox intent commit together; a failed replacement preserves the previously current version. Receipt replay cannot republish or duplicate notification intent. Outbox persistence does not itself deliver a notification.
+
+## Persistence conventions
+
+Application services coordinate validation, authorization, lifecycle changes, and transaction boundaries. Typed repository contracts isolate SQL and row mapping in infrastructure persistence adapters; JDBC types do not appear in application code or repository time values. Shared command admission uses a lock repository adapter. Transactions spanning multiple repositories remain coordinated by the application operation, preserving rollback and lock order.
+
+Use imports for annotations and class references. Fully qualified names inside JPQL constructor expressions remain query text. `PersistenceConventionTest` checks imported names, application/command JDBC boundaries, and repository dependency direction.
+
 ## Command and operational boundaries
 
 Command identity is scoped by actor, command type, and idempotency key. Equivalent canonical payloads replay a successful result after current authorization is rechecked; changing the payload under the same identity returns `409`. Domain mutations, receipts, audit records, and outbox records share a transaction. Activation admission and rejection audit use the separate transactions described above. Receipts carry a seven-day retention deadline.
 
-Outbox persistence records pending events; no implemented dispatcher publishes them or delivers invitations to an external provider. Initial accounts and privileged roles require controlled database provisioning. The provisioning script issues the identity, organization, profile, attendance and leave grants explicitly, revokes stale table and sequence privileges before re-granting, and keeps audit access at `SELECT, INSERT`; rerun it after migrations, including when upgrading a role provisioned by an earlier script.
+Outbox persistence records pending events; no implemented dispatcher publishes them or delivers invitations to an external provider. Initial accounts and privileged roles require controlled database provisioning. The provisioning script issues the identity, organization, profile, attendance, leave, document, reimbursement and payslip grants explicitly, revokes stale table and sequence privileges before re-granting, and keeps audit access at `SELECT, INSERT`; rerun it after migrations, including when upgrading a role provisioned by an earlier script.
 
 Upgrade migrations remove legacy plaintext invitation secrets from command receipts and fail closed for unusable replay payloads. Potential exposure revokes outstanding invitations. SQL cleanup does not erase historical backups or WAL: restricted retention and isolated, migrated restores remain operator responsibilities. Interval-order migration rejects invalid existing assignments rather than rewriting their history.
 
@@ -273,9 +348,7 @@ The verification path is:
 ./gradlew check bootJar --no-daemon --console=plain
 ```
 
-Local verification on November 10, 2026 ran `./gradlew check` successfully. Unit tests: 484 cases, 483 passed with one optional skip. PostgreSQL: 210 cases, all passed, including workflow concurrency, rollback and provisioning cases. Merged coverage is 7,635/8,126 lines (93.96%) and 3,018/3,523 branches (85.67%); both 85% gates pass.
-
-Local verification and remote required-check enforcement are separate evidence. A remote CI run passed for the delivered revision; repository protection enforcement remains unverified. Frontend delivery, notification delivery and production readiness remain outside the implemented backend scope.
+`check` runs the configured unit, PostgreSQL integration, architecture-convention, and coverage checks. PostgreSQL checks require the isolated database setup described in [README.md](README.md); do not point them at a shared database. Generate the runnable artifact with `bootJar`. Passing local checks does not configure remote branch protection, external notification delivery, scanner trust, transport bounds, or recovery procedures.
 
 ### Provisioning and defensive-path coverage
 

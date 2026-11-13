@@ -1,5 +1,6 @@
 package id.mydev.peoplecore.common.command;
 
+import id.mydev.peoplecore.common.infrastructure.persistence.JdbcCommandLockRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import tools.jackson.databind.ObjectMapper;
@@ -11,9 +12,10 @@ import id.mydev.peoplecore.common.api.PayloadTooLargeException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.List;
 
 class CommandExecutionCoordinatorTest {
-    private final CommandExecutionCoordinator coordinator = new CommandExecutionCoordinator(new JdbcTemplate(), new ObjectMapper(), 100);
+    private final CommandExecutionCoordinator coordinator = new CommandExecutionCoordinator(new JdbcCommandLockRepository(new JdbcTemplate()), new ObjectMapper(), 100);
 
     @Test
     void hashesCanonicalJsonWithoutChangingArrayOrderOrNullSemantics() {
@@ -33,8 +35,8 @@ class CommandExecutionCoordinatorTest {
 
     @Test
     void rejectsOversizedPayloadAndExcessiveJsonStructure() {
-        assertThrows(id.mydev.peoplecore.common.api.PayloadTooLargeException.class,
-            () -> coordinator.requestHash(" ".repeat(id.mydev.peoplecore.common.api.PayloadLimits.MAX_BODY_BYTES + 1)));
+        assertThrows(PayloadTooLargeException.class,
+            () -> coordinator.requestHash(" ".repeat(PayloadLimits.MAX_BODY_BYTES + 1)));
         assertThrows(tools.jackson.core.exc.StreamConstraintsException.class,
             () -> coordinator.requestHash("[".repeat(65) + "0" + "]".repeat(65)));
         assertThrows(tools.jackson.core.exc.StreamConstraintsException.class,
@@ -46,7 +48,7 @@ class CommandExecutionCoordinatorTest {
     @Test
     void rejectsMissingTransactionAndInvalidCommandParameters() {
         assertThrows(IllegalStateException.class, () -> coordinator.lock("actor", "type", "key"));
-        assertThrows(IllegalArgumentException.class, () -> new CommandExecutionCoordinator(new JdbcTemplate(), new ObjectMapper(), 0));
+        assertThrows(IllegalArgumentException.class, () -> new CommandExecutionCoordinator(new JdbcCommandLockRepository(new JdbcTemplate()), new ObjectMapper(), 0));
         assertThrows(IllegalArgumentException.class, () -> coordinator.requestHash(""));
         assertThrows(tools.jackson.core.JacksonException.class, () -> coordinator.requestHash("{\"a\":1,\"a\":2}"));
         assertThrows(tools.jackson.core.JacksonException.class, () -> coordinator.requestHash("{}{}"));
@@ -54,6 +56,6 @@ class CommandExecutionCoordinatorTest {
         assertThrows(IllegalArgumentException.class, () -> new CommandExecutionService.CommandContext("actor", "TYPE", "KEY", "{}", Duration.ZERO));
         assertThrows(InvalidIdempotencyKeyException.class, () -> new CommandExecutionService.CommandContext("actor", "TYPE", "x".repeat(129), "{}", null));
         assertThrows(InvalidIdempotencyKeyException.class, () -> new CommandExecutionService.CommandContext("actor", "TYPE", "  ", "{}", null));
-        assertThrows(IllegalArgumentException.class, () -> new CommandExecutionService.CommandExecutionPlan<>(java.util.List::of, java.util.List.class, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new CommandExecutionService.CommandExecutionPlan<>(List::of, List.class, null, null));
     }
 }

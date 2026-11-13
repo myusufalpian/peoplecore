@@ -8,6 +8,7 @@ import java.io.FilterInputStream;
 import java.io.InputStream;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
@@ -87,6 +88,17 @@ public final class PrivateDocumentStorage {
                 response.abort();
             }
         };
+    }
+
+    public void deleteCandidate(UUID attemptId) {
+        deleteObject("candidates/" + Objects.requireNonNull(attemptId, "attemptId"));
+    }
+
+    public void deleteObject(String key) {
+        if (key == null || key.length() > 512 || !key.startsWith("candidates/") || key.contains("..")) {
+            throw new IllegalArgumentException("Document object key is outside the candidate prefix");
+        }
+        client.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build());
     }
 
     private static String stagingKey(UUID uploadId) {

@@ -69,6 +69,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.Collections;
 
 @Service
 public class ProfileProposalService {
@@ -411,7 +412,7 @@ public class ProfileProposalService {
     }
 
     private static Map<String, String> unmodifiableCopy(Map<String, String> values) {
-        return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(values));
+        return Collections.unmodifiableMap(new LinkedHashMap<>(values));
     }
 
     @Transactional

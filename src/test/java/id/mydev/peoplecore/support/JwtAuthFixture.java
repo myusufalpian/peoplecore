@@ -5,6 +5,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.time.Instant;
+import java.util.List;
 
 public final class JwtAuthFixture {
     private JwtAuthFixture() { }
@@ -18,7 +19,7 @@ public final class JwtAuthFixture {
             .issuedAt(now)
             .expiresAt(now.plusSeconds(300))
             .build();
-        return new JwtAuthenticationToken(jwt, java.util.List.of());
+        return new JwtAuthenticationToken(jwt, List.of());
     }
 
     public static Authentication named(String issuer, String subject) {

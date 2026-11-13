@@ -1,6 +1,11 @@
 package id.mydev.peoplecore.reimbursement.api.controller;
 
 import id.mydev.peoplecore.common.api.ApiData;
+import id.mydev.peoplecore.document.api.DocumentStream;
+import id.mydev.peoplecore.document.application.service.DocumentTarget;
+import id.mydev.peoplecore.document.application.service.DocumentVersionContentService;
+import id.mydev.peoplecore.document.application.service.RevocableDocumentTransfer;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementCommands;
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels.Action;
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels.Draft;
@@ -17,7 +22,9 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.time.LocalDate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,6 +36,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @RestController
 @RequestMapping("/api/v1/reimbursement")
@@ -39,12 +47,17 @@ public class ReimbursementController {
     private final ReimbursementCommands commands;
     private final ReimbursementWorkflowService workflow;
     private final ReimbursementCategoryService categories;
+    private final DocumentVersionContentService content;
+    private final ObjectProvider<RevocableDocumentTransfer> transfers;
 
     public ReimbursementController(ReimbursementCommands commands, ReimbursementWorkflowService workflow,
-                                   ReimbursementCategoryService categories) {
+                                   ReimbursementCategoryService categories, DocumentVersionContentService content,
+                                   ObjectProvider<RevocableDocumentTransfer> transfers) {
         this.commands = commands;
         this.workflow = workflow;
         this.categories = categories;
+        this.content = content;
+        this.transfers = transfers;
     }
 
     @GetMapping("/categories")
@@ -96,5 +109,13 @@ public class ReimbursementController {
     public ApiData<HistoryPage> history(@PathVariable UUID id, @RequestParam(defaultValue = "50") int limit,
                                         @RequestParam(required = false) UUID cursor, Authentication caller) {
         return ApiData.of(workflow.history(id, limit, cursor, caller));
+    }
+
+    @GetMapping("/claims/{id}/evidence/{documentId}/content")
+    public ResponseEntity<StreamingResponseBody> evidenceContent(@PathVariable UUID id, @PathVariable UUID documentId,
+                                                                 Authentication caller) {
+        DocumentTarget target = workflow.requireEvidenceContent(id, documentId, caller);
+        return DocumentStream.attachment(transfers, content, target, Purpose.CLAIM_EVIDENCE, "evidence",
+            () -> target.equals(workflow.requireEvidenceContent(id, documentId, caller)));
     }
 }

@@ -2,6 +2,7 @@ package id.mydev.peoplecore.reimbursement.application.service;
 
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
+import id.mydev.peoplecore.document.application.service.DocumentTarget;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
@@ -15,13 +16,16 @@ import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels.Summary;
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels.ClaimPage;
 import jakarta.persistence.EntityManager;
-import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
+import id.mydev.peoplecore.reimbursement.domain.repository.ReimbursementWorkflowRepository;
+import id.mydev.peoplecore.reimbursement.domain.repository.ReimbursementWorkflowRepository.Claim;
+import id.mydev.peoplecore.reimbursement.domain.repository.ReimbursementWorkflowRepository.Reviewer;
+import id.mydev.peoplecore.reimbursement.domain.repository.ReimbursementWorkflowRepository.Payment;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
@@ -32,7 +36,7 @@ import tools.jackson.databind.JsonNode;
 
 @Service
 public class ReimbursementWorkflowService {
-    private final JdbcTemplate jdbc;
+    private final ReimbursementWorkflowRepository repository;
     private final EmployeeService employees;
     private final AccountAccessService access;
     private final ReimbursementSubmissionService submissions;
@@ -41,10 +45,10 @@ public class ReimbursementWorkflowService {
     private final AdmissionGuard admission;
     private final Clock clock;
 
-    public ReimbursementWorkflowService(JdbcTemplate jdbc, EmployeeService employees, AccountAccessService access,
+    public ReimbursementWorkflowService(ReimbursementWorkflowRepository repository, EmployeeService employees, AccountAccessService access,
                                         ReimbursementSubmissionService submissions, ReimbursementCategoryService categories,
                                         EntityManager entities, AdmissionGuard admission, Clock clock) {
-        this.jdbc = jdbc;
+        this.repository = repository;
         this.employees = employees;
         this.access = access;
         this.submissions = submissions;
@@ -58,8 +62,7 @@ public class ReimbursementWorkflowService {
     public View get(UUID claimPublicId, Authentication caller) {
         admission.acquire(AdmissionGuard.Mode.SHARED);
         entities.clear();
-        UUID employeePublicId = jdbc.query("SELECT e.public_id FROM reimbursement_claim c JOIN employees e ON e.id=c.employee_id WHERE c.public_id=?",
-            (rs, row) -> rs.getObject(1, UUID.class), claimPublicId).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+        UUID employeePublicId = repository.findEmployee(claimPublicId).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
         Employee employee = employees.requireInternalByPublicId(employeePublicId);
         Claim claim = claim(claimPublicId, employee, false);
         requireRead(claim, employee, caller);
@@ -71,25 +74,35 @@ public class ReimbursementWorkflowService {
     }
 
     @Transactional(readOnly = true)
+    public DocumentTarget requireEvidenceContent(UUID claimPublicId, UUID documentPublicId, Authentication caller) {
+        Objects.requireNonNull(documentPublicId, "documentPublicId must not be null");
+        admission.acquire(AdmissionGuard.Mode.SHARED);
+        entities.clear();
+        UUID employeePublicId = repository.findEmployee(claimPublicId).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+        Employee employee = employees.requireInternalByPublicId(employeePublicId);
+        Claim claim = claim(claimPublicId, employee, false);
+        requireRead(claim, employee, caller);
+        List<DocumentTarget> rows = repository.findEvidenceContent(claim.id(), claim.revision(), documentPublicId, employee.getId()).stream().map(row -> new DocumentTarget(row.publicId(), row.versionId(), row.employeeId(), row.mediaType())).toList();
+        entities.clear();
+        Employee freshEmployee = employees.requireInternalByPublicId(employeePublicId);
+        requireRead(claim(claimPublicId, freshEmployee, false), freshEmployee, caller);
+        return rows.stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+    }
+
+    @Transactional(readOnly = true)
     public HistoryPage history(UUID claimPublicId, int limit, UUID cursor, Authentication caller) {
         if (limit < 1 || limit > 100) throw new IllegalArgumentException("Limit must be between 1 and 100");
         admission.acquire(AdmissionGuard.Mode.SHARED);
         entities.clear();
-        UUID employeePublicId = jdbc.query("SELECT e.public_id FROM reimbursement_claim c JOIN employees e ON e.id=c.employee_id WHERE c.public_id=?",
-            (rs, row) -> rs.getObject(1, UUID.class), claimPublicId).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+        UUID employeePublicId = repository.findEmployee(claimPublicId).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
         Employee employee = employees.requireInternalByPublicId(employeePublicId);
         Claim claim = claim(claimPublicId, employee, false);
         requireRead(claim, employee, caller);
         Long beforeId = null;
         if (cursor != null) {
-            beforeId = jdbc.query("SELECT id FROM reimbursement_history WHERE claim_id=? AND public_id=?",
-                (rs, row) -> rs.getLong(1), claim.id(), cursor).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+            beforeId = repository.findHistoryCursor(claim.id(), cursor).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
         }
-        List<History> rows = jdbc.query("SELECT public_id,revision,action,actor_public_id,reason,reviewer_public_id,review_step,created_at "
-                + "FROM reimbursement_history WHERE claim_id=? AND (?::bigint IS NULL OR id<?) ORDER BY id DESC LIMIT ?",
-            (rs, row) -> new History(rs.getObject(1, UUID.class), rs.getInt(2), rs.getString(3), rs.getObject(4, UUID.class),
-                rs.getString(5), rs.getObject(6, UUID.class), rs.getObject(7, Integer.class), rs.getTimestamp(8).toInstant()),
-            claim.id(), beforeId, beforeId, limit + 1);
+        List<History> rows = repository.findHistory(claim.id(), beforeId, beforeId, limit + 1).stream().map(row -> new History(row.publicId(), row.revision(), row.action(), row.actor(), row.reason(), row.reviewer(), row.step(), row.createdAt())).toList();
         entities.clear();
         Employee freshEmployee = employees.requireInternalByPublicId(employeePublicId);
         requireRead(claim(claimPublicId, freshEmployee, false), freshEmployee, caller);
@@ -105,38 +118,8 @@ public class ReimbursementWorkflowService {
         entities.clear();
         UserAccount actor = activeReader(caller);
         UUID ownEmployee = access.ownEmployeePublicId(actor).orElse(null);
-        Timestamp at = Timestamp.from(clock.instant());
-        List<Summary> rows = jdbc.query("""
-            WITH actor AS (SELECT ?::bigint AS id, ?::uuid AS public_id, ?::uuid AS employee_id, ?::timestamptz AS at_time)
-            SELECT c.public_id,e.public_id,c.status,c.revision,c.version,c.category_code,c.transaction_date,c.amount
-            FROM reimbursement_claim c JOIN employees e ON e.id=c.employee_id CROSS JOIN actor a
-            LEFT JOIN LATERAL (
-                SELECT ea.org_unit FROM employee_assignments ea
-                WHERE ea.employee_id=e.id AND ea.superseded_at IS NULL AND ea.valid_from<=a.at_time
-                  AND (ea.valid_to IS NULL OR ea.valid_to>a.at_time)
-                ORDER BY ea.valid_from DESC LIMIT 1
-            ) org ON TRUE
-            WHERE (?::uuid IS NULL OR c.public_id<?::uuid) AND (
-                e.public_id=a.employee_id
-                OR EXISTS (SELECT 1 FROM role_assignments role WHERE role.account_id=a.id
-                    AND role.role IN ('HR_ADMIN','FINANCE_PAYROLL') AND role.effective_from<=a.at_time
-                    AND (role.effective_to IS NULL OR role.effective_to>a.at_time)
-                    AND (role.scope IS NULL OR btrim(role.scope)='' OR role.scope=org.org_unit))
-                OR (c.status='PENDING' AND a.employee_id IS NOT NULL AND a.employee_id<>e.public_id
-                    AND EXISTS (SELECT 1 FROM reimbursement_review_assignment ra
-                        WHERE ra.claim_id=c.id AND ra.revision=c.revision AND ra.active
-                          AND ra.reviewer_account_public_id=a.public_id AND ra.reviewer_employee_public_id=a.employee_id
-                          AND ra.step=CASE WHEN EXISTS (SELECT 1 FROM reimbursement_decision d
-                              WHERE d.claim_id=c.id AND d.revision=c.revision AND d.step=1 AND d.outcome='APPROVE')
-                              THEN 2 ELSE 1 END
-                          AND EXISTS (SELECT 1 FROM role_assignments role WHERE role.account_id=a.id
-                              AND role.role=CASE WHEN ra.step=1 THEN 'MANAGER' ELSE 'FINANCE_PAYROLL' END
-                              AND role.effective_from<=a.at_time AND (role.effective_to IS NULL OR role.effective_to>a.at_time)
-                              AND (role.scope IS NULL OR btrim(role.scope)='' OR role.scope=org.org_unit))))
-            ) ORDER BY c.public_id DESC LIMIT ?
-            """, (rs, row) -> new Summary(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3),
-            rs.getInt(4), rs.getLong(5), rs.getString(6), rs.getObject(7, LocalDate.class), rs.getLong(8)),
-            actor.getId(), actor.getPublicId(), ownEmployee, at, cursor, cursor, limit + 1);
+        Instant at = clock.instant();
+        List<Summary> rows = repository.list(actor.getId(), actor.getPublicId(), ownEmployee, at, cursor, cursor, limit + 1).stream().map(row -> new Summary(row.publicId(), row.employeeId(), row.status(), row.revision(), row.version(), row.category(), row.date(), row.amount())).toList();
         entities.clear();
         activeReader(caller);
         for (Summary item : rows) {
@@ -211,9 +194,7 @@ public class ReimbursementWorkflowService {
         validateDraft(draft);
         Employee employee = lockEmployee(draft.employeePublicId());
         requireEmployeeOwner(employee, caller);
-        jdbc.update("INSERT INTO reimbursement_claim(public_id,employee_id,status,category_code,transaction_date,amount,description,created_at) "
-                + "VALUES (?,?,'DRAFT',?,?,?,?,?)", publicId, employee.getId(), draft.categoryCode(),
-            draft.transactionDate(), draft.amount(), draft.description(), now());
+        repository.create(publicId, employee.getId(), draft.categoryCode(), draft.transactionDate(), draft.amount(), draft.description(), now());
         Claim claim = claim(publicId, employee, true);
         replaceEvidence(claim.id(), draft.evidence());
         recordHistory(claim, "CREATE", null, caller);
@@ -229,8 +210,7 @@ public class ReimbursementWorkflowService {
         Claim claim = claim(publicId, employee, true);
         requireVersion(claim, draft.expectedVersion());
         requireStatus(claim, "DRAFT", "RETURNED");
-        jdbc.update("UPDATE reimbursement_claim SET category_code=?,transaction_date=?,amount=?,description=?,version=version+1 WHERE id=?",
-            draft.categoryCode(), draft.transactionDate(), draft.amount(), draft.description(), claim.id());
+        repository.edit(draft.categoryCode(), draft.transactionDate(), draft.amount(), draft.description(), claim.id());
         replaceEvidence(claim.id(), draft.evidence());
         Claim updated = claim(publicId, employee, false);
         recordHistory(updated, "EDIT", null, caller);
@@ -276,8 +256,7 @@ public class ReimbursementWorkflowService {
 
     private void recordHistory(Claim claim, String action, String reason, Authentication caller) {
         UserAccount actor = access.requireActive(caller, clock.instant());
-        jdbc.update("INSERT INTO reimbursement_history(public_id,claim_id,revision,action,actor_public_id,reason,created_at) "
-                + "VALUES (?,?,?,?,?,?,?)", UUID.randomUUID(), claim.id(), claim.revision(), action, actor.getPublicId(), reason, now());
+        repository.recordHistory(UUID.randomUUID(), claim.id(), claim.revision(), action, actor.getPublicId(), reason, now());
     }
 
     private void retryRoute(Claim claim, Employee employee, String reason, Authentication caller) {
@@ -296,16 +275,13 @@ public class ReimbursementWorkflowService {
             Reviewer finance = reviewer(claim, 2);
             if (candidate != null && Objects.equals(candidate.employee(), finance.employee())) candidate = null;
             requireHr(employee, caller);
-            jdbc.update("UPDATE reimbursement_review_assignment SET active=FALSE WHERE claim_id=? AND revision=? AND step=1 AND active",
-                claim.id(), claim.revision());
-            jdbc.update("INSERT INTO reimbursement_review_assignment(claim_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,created_at) VALUES (?,?,1,?,?,?)",
-                claim.id(), claim.revision(), candidate == null ? null : candidate.account(), candidate == null ? null : candidate.employee(), now());
+            repository.deactivateManager(claim.id(), claim.revision());
+            repository.assignManager(claim.id(), claim.revision(), candidate == null ? null : candidate.account(), candidate == null ? null : candidate.employee(), now());
         }
         UserAccount actor = access.requireHrOperation(caller, clock.instant());
         access.requireTargetScope(actor.getId(), currentUnit(employee), clock.instant());
-        jdbc.update("INSERT INTO reimbursement_history(public_id,claim_id,revision,action,actor_public_id,reason,created_at) VALUES (?,?,?,'RETRY_ROUTE',?,?,?)",
-            UUID.randomUUID(), claim.id(), claim.revision(), actor.getPublicId(), reason, now());
-        jdbc.update("UPDATE reimbursement_claim SET version=version+1 WHERE id=?", claim.id());
+        repository.recordRouteRetry(UUID.randomUUID(), claim.id(), claim.revision(), actor.getPublicId(), reason, now());
+        repository.incrementVersion(claim.id());
     }
 
     private void reassign(Claim claim, Employee employee, Action action, Authentication caller) {
@@ -319,17 +295,13 @@ public class ReimbursementWorkflowService {
         if (other.employee() != null && other.employee().equals(candidate.employee())) {
             throw new ReimbursementConflictException("DISTINCT_REVIEWERS_REQUIRED");
         }
-        Integer decided = jdbc.queryForObject("SELECT count(id) FROM reimbursement_decision WHERE claim_id=? AND revision=? AND step=?",
-            Integer.class, claim.id(), claim.revision(), action.step());
+        Integer decided = repository.countDecisions(claim.id(), claim.revision(), action.step());
         if (decided != null && decided > 0) throw new ReimbursementConflictException("REVIEW_ALREADY_DECIDED");
         requireHr(employee, caller);
-        jdbc.update("UPDATE reimbursement_review_assignment SET active=FALSE WHERE claim_id=? AND revision=? AND step=? AND active",
-            claim.id(), claim.revision(), action.step());
-        jdbc.update("INSERT INTO reimbursement_review_assignment(claim_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,created_at) VALUES (?,?,?,?,?,?)",
-            claim.id(), claim.revision(), action.step(), candidate.account(), candidate.employee(), now());
-        jdbc.update("INSERT INTO reimbursement_history(public_id,claim_id,revision,action,actor_public_id,reason,reviewer_public_id,review_step,created_at) VALUES (?,?,?,'REASSIGN',?,?,?,?,?)",
-            UUID.randomUUID(), claim.id(), claim.revision(), operator.getPublicId(), action.reason(), candidate.account(), action.step(), now());
-        jdbc.update("UPDATE reimbursement_claim SET version=version+1 WHERE id=?", claim.id());
+        repository.deactivateReviewer(claim.id(), claim.revision(), action.step());
+        repository.assignReviewer(claim.id(), claim.revision(), action.step(), candidate.account(), candidate.employee(), now());
+        repository.recordReassignment(UUID.randomUUID(), claim.id(), claim.revision(), operator.getPublicId(), action.reason(), candidate.account(), action.step(), now());
+        repository.incrementVersion(claim.id());
     }
 
     private void decide(Claim claim, Employee employee, String outcome, String reason, Authentication caller) {
@@ -345,15 +317,13 @@ public class ReimbursementWorkflowService {
         Reviewer current = eligible(actor.getPublicId(), employee, step);
         if (!Objects.equals(assigned.employee(), current.employee())) throw new ResourceNotFoundException();
         if (step == 2) {
-            UUID previous = jdbc.queryForObject("SELECT reviewer_employee_public_id FROM reimbursement_decision "
-                + "WHERE claim_id=? AND revision=? AND step=1 AND outcome='APPROVE'", UUID.class, claim.id(), claim.revision());
+            UUID previous = repository.findApprovedManager(claim.id(), claim.revision());
             if (Objects.equals(previous, current.employee())) throw new ReimbursementConflictException("DISTINCT_REVIEWERS_REQUIRED");
         }
         eligible(actor.getPublicId(), employee, step);
-        jdbc.update("INSERT INTO reimbursement_decision(claim_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,outcome,reason,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            claim.id(), claim.revision(), step, actor.getPublicId(), current.employee(), outcome, reason, now());
+        repository.recordDecision(claim.id(), claim.revision(), step, actor.getPublicId(), current.employee(), outcome, reason, now());
         if ("APPROVE".equals(outcome) && step == 1) {
-            jdbc.update("UPDATE reimbursement_claim SET version=version+1 WHERE id=?", claim.id());
+            repository.incrementVersion(claim.id());
         } else {
             transition(claim, "APPROVE".equals(outcome) ? "APPROVED" : "RETURN".equals(outcome) ? "RETURNED" : "REJECTED");
         }
@@ -366,8 +336,7 @@ public class ReimbursementWorkflowService {
             throw new IllegalArgumentException("Payment date and reference are required");
         }
         UserAccount actor = requireFinance(employee, caller);
-        jdbc.update("INSERT INTO reimbursement_payment(public_id,claim_id,revision,amount,paid_date,payment_reference,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            UUID.randomUUID(), claim.id(), claim.revision(), claim.amount(), action.paidDate(), action.paymentReference(), actor.getPublicId(), now());
+        repository.recordPayment(UUID.randomUUID(), claim.id(), claim.revision(), claim.amount(), action.paidDate(), action.paymentReference(), actor.getPublicId(), now());
         transition(claim, "PAID");
     }
 
@@ -377,25 +346,21 @@ public class ReimbursementWorkflowService {
         if (action.paidDate() == null || !StringUtils.hasText(action.paymentReference()) || !StringUtils.hasText(action.reason())) {
             throw new IllegalArgumentException("Payment date, reference and reason are required");
         }
-        Payment payment = jdbc.query("SELECT id,paid_date,payment_reference FROM reimbursement_payment WHERE claim_id=? FOR UPDATE",
-            (rs, row) -> new Payment(rs.getLong(1), rs.getObject(2, LocalDate.class), rs.getString(3)), claim.id())
+        Payment payment = repository.lockPayment(claim.id())
             .stream().findFirst().orElseThrow(ResourceNotFoundException::new);
-        List<Payment> corrections = jdbc.query("SELECT payment_id,corrected_paid_date,corrected_reference FROM reimbursement_payment_correction "
-                + "WHERE payment_id=? ORDER BY id DESC LIMIT 1",
-            (rs, row) -> new Payment(rs.getLong(1), rs.getObject(2, LocalDate.class), rs.getString(3)), payment.id());
+        List<Payment> corrections = repository.findPaymentCorrections(payment.id());
         Payment previous = corrections.isEmpty() ? payment : corrections.getFirst();
         UserAccount actor = requireFinance(employee, caller);
-        jdbc.update("INSERT INTO reimbursement_payment_correction(public_id,payment_id,prior_paid_date,prior_reference,corrected_paid_date,corrected_reference,reason,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            UUID.randomUUID(), payment.id(), previous.date(), previous.reference(), action.paidDate(), action.paymentReference(), action.reason(), actor.getPublicId(), now());
-        jdbc.update("UPDATE reimbursement_claim SET version=version+1 WHERE id=?", claim.id());
+        repository.recordPaymentCorrection(UUID.randomUUID(), payment.id(), previous.date(), previous.reference(), action.paidDate(), action.paymentReference(), action.reason(), actor.getPublicId(), now());
+        repository.incrementVersion(claim.id());
     }
 
     private Employee lockEmployee(UUID id) {
         entities.flush();
         entities.clear();
         Employee employee = employees.requireInternalByPublicId(id);
-        jdbc.update("INSERT INTO reimbursement_account(employee_id) VALUES (?) ON CONFLICT DO NOTHING", employee.getId());
-        jdbc.queryForObject("SELECT employee_id FROM reimbursement_account WHERE employee_id=? FOR UPDATE", Long.class, employee.getId());
+        repository.ensureAccount(employee.getId());
+        repository.lockAccount(employee.getId());
         entities.clear();
         return employees.requireInternalByPublicId(id);
     }
@@ -442,38 +407,31 @@ public class ReimbursementWorkflowService {
     }
 
     private Claim claim(UUID id, Employee employee, boolean lock) {
-        return jdbc.query("SELECT id,public_id,status,revision,version,category_code,transaction_date,amount,description FROM reimbursement_claim "
-                + "WHERE public_id=? AND employee_id=?" + (lock ? " FOR UPDATE" : ""),
-            (rs, row) -> new Claim(rs.getLong(1), rs.getObject(2, UUID.class), rs.getString(3), rs.getInt(4),
-                rs.getLong(5), rs.getString(6), rs.getObject(7, LocalDate.class), rs.getLong(8), rs.getString(9)), id, employee.getId())
+        return repository.findClaim(id, employee.getId(), lock)
             .stream().findFirst().orElseThrow(ResourceNotFoundException::new);
     }
 
     private Reviewer reviewer(Claim claim, int step) {
-        return jdbc.query("SELECT reviewer_account_public_id,reviewer_employee_public_id FROM reimbursement_review_assignment "
-                + "WHERE claim_id=? AND revision=? AND step=? AND active",
-            (rs, row) -> new Reviewer(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class)), claim.id(), claim.revision(), step)
+        return repository.findReviewers(claim.id(), claim.revision(), step)
             .stream().findFirst().orElse(new Reviewer(null, null));
     }
 
     private int activeStep(Claim claim) {
-        Integer count = jdbc.queryForObject("SELECT count(id) FROM reimbursement_decision WHERE claim_id=? AND revision=? AND step=1 AND outcome='APPROVE'",
-            Integer.class, claim.id(), claim.revision());
+        Integer count = repository.countManagerApprovals(claim.id(), claim.revision());
         return count != null && count > 0 ? 2 : 1;
     }
 
     private void transition(Claim claim, String status) {
-        jdbc.update("UPDATE reimbursement_claim SET status=?,version=version+1 WHERE id=?", status, claim.id());
+        repository.transition(status, claim.id());
     }
 
     private void replaceEvidence(long claimId, List<UUID> evidence) {
-        jdbc.update("DELETE FROM reimbursement_draft_evidence WHERE claim_id=?", claimId);
-        for (UUID document : evidence) jdbc.update("INSERT INTO reimbursement_draft_evidence(claim_id,document_public_id) VALUES (?,?)", claimId, document);
+        repository.clearEvidence(claimId);
+        for (UUID document : evidence) repository.insertEvidence(claimId, document);
     }
 
     private View view(Claim claim, Employee employee) {
-        List<UUID> evidence = jdbc.query("SELECT document_public_id FROM reimbursement_draft_evidence WHERE claim_id=? ORDER BY document_public_id",
-            (rs, row) -> rs.getObject(1, UUID.class), claim.id());
+        List<UUID> evidence = repository.findEvidence(claim.id());
         String blocked = routeBlocked(claim, employee) ? "ROUTE_BLOCKED" : null;
         return new View(claim.publicId(), employee.getPublicId(), claim.status(), claim.revision(), claim.version(),
             claim.category(), claim.date(), claim.amount(), claim.description(), evidence, blocked);
@@ -511,9 +469,8 @@ public class ReimbursementWorkflowService {
         if (claim.version() != version) throw new ReimbursementConflictException("CLAIM_VERSION_CHANGED");
     }
 
-    private Timestamp now() { return Timestamp.from(clock.instant()); }
-    private record Claim(long id, UUID publicId, String status, int revision, long version, String category,
-                         LocalDate date, long amount, String description) { }
-    private record Reviewer(UUID account, UUID employee) { }
-    private record Payment(long id, LocalDate date, String reference) { }
+    private Instant now() { return clock.instant(); }
+
+
+
 }

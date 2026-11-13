@@ -52,13 +52,16 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.ArrayList;
 import java.util.List;
+import id.mydev.peoplecore.leave.application.service.LeaveConflictException;
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ExceptionHandler(id.mydev.peoplecore.leave.application.service.LeaveConflictException.class)
-    public ResponseEntity<ErrorResponse> handleLeaveConflict(id.mydev.peoplecore.leave.application.service.LeaveConflictException ex) {
+    @ExceptionHandler(LeaveConflictException.class)
+    public ResponseEntity<ErrorResponse> handleLeaveConflict(LeaveConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of("LEAVE_CONFLICT", ex.getMessage()));
     }
 
@@ -258,14 +261,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             .body(ErrorResponse.of("CONTEXT_CHANGED", "Konteks berubah sejak preview, buat preview baru."));
     }
 
-    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
-    public ResponseEntity<ErrorResponse> handleOptimisticLock(org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(ObjectOptimisticLockingFailureException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
             .body(ErrorResponse.of("STALE_REVISION", "Data telah berubah, silakan muat ulang dan coba lagi."));
     }
 
-    @ExceptionHandler(org.springframework.dao.PessimisticLockingFailureException.class)
-    public ResponseEntity<ErrorResponse> handlePessimisticLock(org.springframework.dao.PessimisticLockingFailureException ex) {
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handlePessimisticLock(PessimisticLockingFailureException ex) {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header(HttpHeaders.RETRY_AFTER, "1")
             .body(ErrorResponse.of("LOCK_TIMEOUT", "Resource sedang dikunci, silakan coba lagi."));
     }

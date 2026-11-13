@@ -1,5 +1,8 @@
 package id.mydev.peoplecore.reimbursement.application.service;
 
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementWorkflowRepository;
+import id.mydev.peoplecore.document.infrastructure.persistence.JdbcVerifiedDocumentRepository;
+
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess;
@@ -9,6 +12,7 @@ import id.mydev.peoplecore.organization.application.service.EmployeeService;
 import id.mydev.peoplecore.organization.domain.model.Employee;
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels.Action;
 import id.mydev.peoplecore.reimbursement.application.command.ReimbursementModels.Draft;
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementSubmissionRepository;
 import id.mydev.peoplecore.support.PostgresFixture;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
@@ -67,9 +71,9 @@ class ReimbursementOwnerWorkflowPostgresTest {
 
             Clock clock = Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC);
             EntityManager entities = mock(EntityManager.class);
-            var submissions = new ReimbursementSubmissionService(jdbc, access, employees,
-                new VerifiedDocumentAccess(jdbc), clock, entities);
-            var workflow = new ReimbursementWorkflowService(jdbc, employees, access, submissions,
+            var submissions = new ReimbursementSubmissionService(new JdbcReimbursementSubmissionRepository(jdbc), access, employees,
+                new VerifiedDocumentAccess(new JdbcVerifiedDocumentRepository(jdbc)), clock, entities);
+            var workflow = new ReimbursementWorkflowService(new JdbcReimbursementWorkflowRepository(jdbc), employees, access, submissions,
                 mock(ReimbursementCategoryService.class), entities, mock(AdmissionGuard.class), clock);
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
             UUID claim = UUID.randomUUID();

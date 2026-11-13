@@ -3,7 +3,7 @@ package id.mydev.peoplecore.document.application.command;
 import id.mydev.peoplecore.common.command.CommandConflictException;
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.document.application.service.DocumentUploadService.Request;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.document.infrastructure.storage.PrivateDocumentStorage;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.RoleAssignment;

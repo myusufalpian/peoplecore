@@ -23,6 +23,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 @Component
 public class EmployeeCommands {
@@ -118,10 +120,10 @@ public class EmployeeCommands {
         Assert.isTrue(reason.length() <= 500, "Change reason exceeds maximum length");
     }
 
-    private <T> T execute(CommandContext context, java.util.function.Supplier<T> action,
+    private <T> T execute(CommandContext context, Supplier<T> action,
                           Class<T> resultType,
-                          java.util.function.Function<T, AuditDescriptor> audit,
-                          java.util.function.Function<T, OutboxDescriptor> outbox) {
+                          Function<T, AuditDescriptor> audit,
+                          Function<T, OutboxDescriptor> outbox) {
         return CommandRetry.withRetry(() -> commands.executeCommand(context, action, resultType, audit, outbox));
     }
 

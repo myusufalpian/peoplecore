@@ -25,7 +25,7 @@ class CurrentCallerTest {
         SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.unauthenticated("actor", ""));
         assertThrows(AuthenticationCredentialsNotFoundException.class, CurrentCaller::require);
         var caller = UsernamePasswordAuthenticationToken.authenticated("actor", "", List.of());
-        assertThrows(AccessDeniedException.class, () -> new CurrentAccessPolicy() { }.checkReplay(caller, new id.mydev.peoplecore.common.command.CommandExecutionService.CommandContext("actor", "CREATE", "key", "{}", null), "{}"));
-        assertThrows(AccessDeniedException.class, () -> new CurrentAccessPolicy() { }.checkCommand(caller, new id.mydev.peoplecore.common.command.CommandExecutionService.CommandContext("actor", "CREATE", "key", "{}", null)));
+        assertThrows(AccessDeniedException.class, () -> new CurrentAccessPolicy() { }.checkReplay(caller, new CommandExecutionService.CommandContext("actor", "CREATE", "key", "{}", null), "{}"));
+        assertThrows(AccessDeniedException.class, () -> new CurrentAccessPolicy() { }.checkCommand(caller, new CommandExecutionService.CommandContext("actor", "CREATE", "key", "{}", null)));
     }
 }

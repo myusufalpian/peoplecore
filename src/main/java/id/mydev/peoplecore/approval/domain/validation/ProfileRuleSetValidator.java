@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.time.Instant;
 
 public final class ProfileRuleSetValidator {
 
@@ -35,7 +36,7 @@ public final class ProfileRuleSetValidator {
         }
     }
 
-    public static void requireImmediateActivation(java.time.Instant requestedAt, java.time.Instant now) {
+    public static void requireImmediateActivation(Instant requestedAt, Instant now) {
         Objects.requireNonNull(requestedAt, "requestedAt must not be null");
         Objects.requireNonNull(now, "now must not be null");
         if (!requestedAt.equals(now)) {

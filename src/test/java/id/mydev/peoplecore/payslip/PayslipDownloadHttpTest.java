@@ -2,7 +2,7 @@ package id.mydev.peoplecore.payslip;
 
 import id.mydev.peoplecore.document.application.service.DocumentVersionContentService;
 import id.mydev.peoplecore.document.application.service.RevocableDocumentTransfer;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.payslip.api.PayslipDownloadController;
 import id.mydev.peoplecore.payslip.application.PayslipModels.PublishedVersion;
 import id.mydev.peoplecore.payslip.application.PayslipService;
@@ -33,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import java.util.Arrays;
 
 class PayslipDownloadHttpTest {
     private static final int SENT_BEFORE_REVOCATION = 16384;
@@ -126,7 +127,7 @@ class PayslipDownloadHttpTest {
         public int read(byte[] bytes, int offset, int length) throws IOException {
             if (produced < SENT_BEFORE_REVOCATION) {
                 int count = Math.min(length, SENT_BEFORE_REVOCATION - produced);
-                java.util.Arrays.fill(bytes, offset, offset + count, (byte) 65);
+                Arrays.fill(bytes, offset, offset + count, (byte) 65);
                 produced += count;
                 return count;
             }

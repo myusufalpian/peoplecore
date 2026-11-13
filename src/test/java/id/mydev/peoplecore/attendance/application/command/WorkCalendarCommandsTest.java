@@ -46,6 +46,8 @@ import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import id.mydev.peoplecore.attendance.domain.repository.WorkScheduleRevisionRepository;
+import jakarta.persistence.EntityManager;
 
 @SpringBootTest(properties = {
     "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -101,8 +103,8 @@ class WorkCalendarCommandsTest {
     @Autowired EmployeeService employees;
     @Autowired UserAccountRepository accountRepository;
     @Autowired RoleAssignmentRepository roleRepository;
-    @Autowired id.mydev.peoplecore.attendance.domain.repository.WorkScheduleRevisionRepository scheduleRevisions;
-    @Autowired jakarta.persistence.EntityManager entityManager;
+    @Autowired WorkScheduleRevisionRepository scheduleRevisions;
+    @Autowired EntityManager entityManager;
 
     private Authentication hrCaller;
     private Authentication scopedCaller;

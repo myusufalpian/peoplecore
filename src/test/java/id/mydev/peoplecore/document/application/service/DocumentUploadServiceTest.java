@@ -1,7 +1,8 @@
 package id.mydev.peoplecore.document.application.service;
 
 import id.mydev.peoplecore.document.application.service.DocumentUploadService.Request;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.repository.DocumentUploadRepository;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.organization.domain.model.Employee;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
@@ -9,7 +10,6 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,11 +18,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class DocumentUploadServiceTest {
-    private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
+    private final DocumentUploadRepository documents = mock(DocumentUploadRepository.class);
     private final EntityManager entities = mock(EntityManager.class);
     private final DocumentAccessPolicy access = mock(DocumentAccessPolicy.class);
     private final Authentication caller = mock(Authentication.class);
-    private final DocumentUploadService service = new DocumentUploadService(jdbc, entities, access,
+    private final DocumentUploadService service = new DocumentUploadService(documents, entities, access,
         Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC));
 
     @Test

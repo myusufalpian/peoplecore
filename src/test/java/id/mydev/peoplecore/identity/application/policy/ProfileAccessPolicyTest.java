@@ -15,6 +15,7 @@ import id.mydev.peoplecore.organization.domain.model.Employee;
 import id.mydev.peoplecore.support.JwtAuthFixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -32,6 +33,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
 
 class ProfileAccessPolicyTest {
 
@@ -227,7 +229,10 @@ class ProfileAccessPolicyTest {
     private final FakeApprovalRules approvalRules = new FakeApprovalRules();
     private final HrisAccessPolicy policy =
         new HrisAccessPolicy(access, employees, enrollments, proposals, approvalRules,
-            new ObjectMapper(), CLOCK);
+            new ObjectMapper(), CLOCK,
+            mock(ObjectProvider.class), mock(ObjectProvider.class), mock(ObjectProvider.class),
+            mock(ObjectProvider.class), mock(ObjectProvider.class), mock(ObjectProvider.class),
+            mock(ObjectProvider.class));
 
     private void seed() {
         access.addAccount("hr-1", 100L, HR_ACCOUNT_ID, true);

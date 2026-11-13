@@ -301,7 +301,7 @@ public class EmployeeService {
         Objects.requireNonNull(at, "at must not be null");
         return assignments.findByEmployeeIdAndSupersededAtIsNullOrderByValidFromAsc(employeeId).stream()
             .filter(a -> !a.getValidFrom().isAfter(at) && (a.getValidTo() == null || at.isBefore(a.getValidTo())))
-            .max(java.util.Comparator.comparing(EmployeeAssignment::getValidFrom))
+            .max(Comparator.comparing(EmployeeAssignment::getValidFrom))
             .map(EmployeeAssignment::getManagerEmployeeId).flatMap(employees::findById)
             .map(Employee::getPublicId);
     }
@@ -315,7 +315,7 @@ public class EmployeeService {
         return assignments.findByEmployeeIdAndSupersededAtIsNullOrderByValidFromAsc(employeeId).stream()
             .filter(assignment -> !assignment.getValidFrom().isAfter(at)
                 && (assignment.getValidTo() == null || at.isBefore(assignment.getValidTo())))
-            .max(java.util.Comparator.comparing(EmployeeAssignment::getValidFrom))
+            .max(Comparator.comparing(EmployeeAssignment::getValidFrom))
             .map(assignment -> new OrganizationContext(assignment.getPublicId(),
                 assignment.getSupersedesId(), assignment.getOrgUnit(), assignment.getJobLevel()));
     }

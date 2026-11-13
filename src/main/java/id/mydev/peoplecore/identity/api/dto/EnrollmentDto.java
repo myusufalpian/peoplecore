@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.util.UUID;
+import java.util.List;
 
 public final class EnrollmentDto {
     private EnrollmentDto() { }
@@ -64,7 +65,7 @@ public final class EnrollmentDto {
     ) { }
 
     public record RestoreAccessRequest(
-        @NotNull @Size(min = 1, max = 10) java.util.List<@NotBlank @Size(max = 32) String> roles,
+        @NotNull @Size(min = 1, max = 10) List<@NotBlank @Size(max = 32) String> roles,
         @Size(max = 128) String scope,
         @Size(max = 500) String reason
     ) { }

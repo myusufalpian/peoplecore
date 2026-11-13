@@ -1,5 +1,6 @@
 package id.mydev.peoplecore.common.command;
 
+import id.mydev.peoplecore.common.infrastructure.persistence.JdbcCommandLockRepository;
 import id.mydev.peoplecore.common.audit.AuditQueryService;
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -40,6 +41,8 @@ import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.List;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Tag("postgres")
 @SpringBootTest(properties = {"peoplecore.runtime.role=worker", "peoplecore.command.lock-timeout-ms=5000", "spring.jpa.hibernate.ddl-auto=validate"})
@@ -89,7 +92,7 @@ class CommandExecutionServiceTest {
         properties.add("spring.datasource.password", () -> DATABASE.runtimePassword);
     }
 
-    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired JdbcTemplate jdbc;
     @Autowired CommandExecutionService service;
     @Autowired CommandExecutionCoordinator coordinator;
     @Autowired AuditQueryService audit;
@@ -102,7 +105,7 @@ class CommandExecutionServiceTest {
     static void closeDatabase() { DATABASE.close(); }
 
     private static void authenticate(String actor) {
-        SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(actor, "", java.util.List.of()));
+        SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(actor, "", List.of()));
     }
     private CommandExecutionService.CommandContext context(String key, String payload) {
         return new CommandExecutionService.CommandContext("actor", "CREATE", key, payload, null);
@@ -225,7 +228,7 @@ class CommandExecutionServiceTest {
             }));
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             authenticate("actor");
-            var shortWait = new CommandExecutionCoordinator(jdbc, mapper, 100);
+            var shortWait = new CommandExecutionCoordinator(new JdbcCommandLockRepository(jdbc), mapper, 100);
             assertThrows(CommandBusyException.class, () -> tx.execute(status -> {
                 shortWait.lock("actor", "CREATE", key);
                 return null;

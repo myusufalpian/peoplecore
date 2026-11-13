@@ -3,7 +3,6 @@ package id.mydev.peoplecore.payslip.application;
 import id.mydev.peoplecore.common.command.CommandExecutionService;
 import id.mydev.peoplecore.common.command.CommandExecutionService.AuditDescriptor;
 import id.mydev.peoplecore.common.command.CommandExecutionService.CommandContext;
-import id.mydev.peoplecore.common.command.CommandExecutionService.OutboxDescriptor;
 import id.mydev.peoplecore.common.command.CommandIds;
 import id.mydev.peoplecore.common.command.CommandRetry;
 import id.mydev.peoplecore.common.command.IdempotencyKeys;
@@ -56,8 +55,6 @@ public class PayslipCommands {
         return CommandRetry.withRetry(() -> commands.executeCommand(context, action, Result.class,
             result -> new AuditDescriptor(type, "PAYSLIP_BATCH", null, result.batchPublicId(), null,
                 "Payslip batch transition", mapper.writeValueAsString(result)),
-            result -> type.equals("PAYSLIP_BATCH_PUBLISH")
-                ? new OutboxDescriptor(type, 1, "PAYSLIP_BATCH", null, result.batchPublicId(), mapper.writeValueAsString(result))
-                : null));
+            result -> null));
     }
 }

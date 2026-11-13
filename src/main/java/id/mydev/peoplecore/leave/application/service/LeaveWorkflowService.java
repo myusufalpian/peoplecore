@@ -24,9 +24,12 @@ import id.mydev.peoplecore.leave.application.command.LeaveWorkflowModels.Summary
 import id.mydev.peoplecore.organization.application.service.EmployeeService;
 import id.mydev.peoplecore.organization.domain.model.Employee;
 import jakarta.persistence.EntityManager;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Timestamp;
+import id.mydev.peoplecore.leave.domain.repository.LeaveWorkflowRepository;
+import id.mydev.peoplecore.leave.domain.repository.LeaveWorkflowRepository.Request;
+import id.mydev.peoplecore.leave.domain.repository.LeaveWorkflowRepository.Reviewer;
+import id.mydev.peoplecore.leave.domain.repository.LeaveWorkflowRepository.Cancellation;
+import id.mydev.peoplecore.leave.domain.repository.LeaveWorkflowRepository.RouteSnapshot;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,7 +39,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
@@ -48,9 +50,8 @@ import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class LeaveWorkflowService {
-    private static final String COLUMNS="id,public_id,employee_id,status,revision,version,from_date,to_date,portion,reason";
     private static final ZoneId ZONE=ZoneId.of("Asia/Jakarta");
-    private final JdbcTemplate jdbc;
+    private final LeaveWorkflowRepository repository;
     private final AccountAccessService access;
     private final EmployeeService employees;
     private final AttendanceAccountGuard attendance;
@@ -62,28 +63,26 @@ public class LeaveWorkflowService {
     private final Clock clock;
     private final ObjectMapper mapper;
 
-    public LeaveWorkflowService(JdbcTemplate jdbc,AccountAccessService access,EmployeeService employees,
+    public LeaveWorkflowService(LeaveWorkflowRepository repository,AccountAccessService access,EmployeeService employees,
                                 AttendanceAccountGuard attendance,AttendanceOccurrenceResolver resolver,
                                 LeaveEntitlementService entitlement,LeaveRoutingService routing,
                                 AdmissionGuard admission,EntityManager entities,Clock clock,ObjectMapper mapper) {
-        this.jdbc=jdbc; this.access=access; this.employees=employees; this.attendance=attendance;
+        this.repository=repository; this.access=access; this.employees=employees; this.attendance=attendance;
         this.resolver=resolver; this.entitlement=entitlement; this.routing=routing;
         this.admission=admission; this.entities=entities; this.clock=clock; this.mapper=mapper;
     }
 
-    private record Request(Long id,UUID publicId,Long employeeId,String status,int revision,
-                           long version,LocalDate from,LocalDate to,Portion portion,String reason) { }
-    private record Reviewer(UUID account,UUID employee,boolean fallback) { }
+
+
     private record Captured(LocalDate date,int half,Instant start,Instant end,Long occurrence,Instant occurrenceStart) { }
-    private record Cancellation(Long id,UUID publicId,Long requestId,String status,long version,String reason,String unit) { }
+
 
     @Transactional(propagation=Propagation.MANDATORY)
     public RequestView create(UUID id,Draft payload,Authentication caller) {
         Employee employee=lockEmployee(payload.employeePublicId());
         requireOwner(employee,caller);
         validateDraft(payload);
-        jdbc.update("INSERT INTO leave_request(public_id,employee_id,status,from_date,to_date,portion,reason,created_at) VALUES (?,?,'DRAFT',?,?,?,?,?)",
-            id,employee.getId(),payload.fromDate(),payload.toDate(),payload.portion().name(),payload.reason(),Timestamp.from(clock.instant()));
+        repository.createDraft(id, employee.getId(), payload.fromDate(), payload.toDate(), payload.portion().name(), payload.reason(), clock.instant());
         return view(request(id,false),employee);
     }
 
@@ -95,8 +94,7 @@ public class LeaveWorkflowService {
         checkVersion(request,expectedVersion);
         requireStatus(request,"DRAFT","RETURNED");
         validateDraft(payload);
-        jdbc.update("UPDATE leave_request SET from_date=?,to_date=?,portion=?,reason=?,version=version+1 WHERE id=?",
-            payload.fromDate(),payload.toDate(),payload.portion().name(),payload.reason(),request.id());
+        repository.editDraft(payload.fromDate(), payload.toDate(), payload.portion().name(), payload.reason(), request.id());
         return view(request(id,false),employee);
     }
 
@@ -127,17 +125,16 @@ public class LeaveWorkflowService {
         Route route=routing.resolve(employee.getId(),employee.getPublicId(),unit,now);
         entitlement.reserve(employee.getId(),request.from().getYear(),request.publicId(),revision,portions.size());
         for(Captured portion:portions) rejectOverlap(employee.getId(),portion);
-        Long config=route.configurationPublicId()==null ? null : jdbc.queryForObject("SELECT id FROM leave_rule_set WHERE public_id=?",Long.class,route.configurationPublicId());
+        Long config=route.configurationPublicId()==null ? null : repository.findRuleSetId(route.configurationPublicId());
         if(portions.stream().anyMatch(portion->!clock.instant().isBefore(portion.occurrenceStart()))) throw new IllegalArgumentException("Leave submission deadline has passed");
-        Long policy=jdbc.queryForObject("SELECT policy_revision_id FROM leave_period WHERE employee_id=? AND period_year=?",Long.class,employee.getId(),request.from().getYear());
-        jdbc.update("INSERT INTO leave_revision(request_id,revision,year,policy_revision_id,half_units,org_unit,manager_employee_public_id,from_date,to_date,portion,reason,submitted_at,rule_set_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            request.id(),revision,request.from().getYear(),policy,portions.size(),unit,employees.currentManagerPublicId(employee.getId(),now).orElse(null),request.from(),request.to(),request.portion().name(),request.reason(),Timestamp.from(now),config);
+        Long policy=repository.findPeriodPolicyId(employee.getId(), request.from().getYear());
+        repository.insertRevision(request.id(), revision, request.from().getYear(), policy, portions.size(), unit, employees.currentManagerPublicId(employee.getId(),now).orElse(null), request.from(), request.to(), Portion.valueOf(request.portion()).name(), request.reason(), now, config);
         for(Captured portion:portions) insertPortion(request,employee,revision,portion);
         insertAssignment(request.id(),revision,1,route.managerAccountPublicId(),false);
         insertAssignment(request.id(),revision,2,route.hrAccountPublicId(),false);
         recordRoute(request.id(),revision,null,route);
         requireOwner(employee,caller);
-        jdbc.update("UPDATE leave_request SET status='PENDING',revision=?,version=version+1 WHERE id=?",revision,request.id());
+        repository.markPending(revision, request.id());
     }
 
     private List<Captured> capture(Request request,Employee employee,Instant now) {
@@ -156,41 +153,37 @@ public class LeaveWorkflowService {
             try {
                 var pinned=resolver.findPinned(employee.getId(),date);
                 if(pinned.isEmpty() && resolver.computeEffective(employee.getId(),date).holidayName()!=null) {
-                    if(request.portion()==Portion.FULL) continue;
+                    if(Portion.valueOf(request.portion())==Portion.FULL) continue;
                     throw new IllegalArgumentException("Partial leave requires working date");
                 }
                 occurrence=pinned.isPresent()?pinned.get():resolver.resolveOrPin(employee.getId(),date);
             }
             catch(WorkContextException ex) {
-                if("NON_WORKING_DATE".equals(ex.getReason()) && request.portion()==Portion.FULL) continue;
+                if("NON_WORKING_DATE".equals(ex.getReason()) && Portion.valueOf(request.portion())==Portion.FULL) continue;
                 throw ex;
             }
             if(occurrence.isHoliday()) {
-                if(request.portion()==Portion.FULL) continue;
+                if(Portion.valueOf(request.portion())==Portion.FULL) continue;
                 throw new IllegalArgumentException("Partial leave requires working date");
             }
             if(!now.isBefore(occurrence.getStartAt())) throw new IllegalArgumentException("Leave submission deadline has passed");
             Instant middle=occurrence.getStartAt().plus(Duration.between(occurrence.getStartAt(),occurrence.getEndAt()).dividedBy(2));
-            if(request.portion()!=Portion.SECOND_HALF) result.add(new Captured(date,1,occurrence.getStartAt(),middle,occurrence.getId(),occurrence.getStartAt()));
-            if(request.portion()!=Portion.FIRST_HALF) result.add(new Captured(date,2,middle,occurrence.getEndAt(),occurrence.getId(),occurrence.getStartAt()));
+            if(Portion.valueOf(request.portion())!=Portion.SECOND_HALF) result.add(new Captured(date,1,occurrence.getStartAt(),middle,occurrence.getId(),occurrence.getStartAt()));
+            if(Portion.valueOf(request.portion())!=Portion.FIRST_HALF) result.add(new Captured(date,2,middle,occurrence.getEndAt(),occurrence.getId(),occurrence.getStartAt()));
         }
         if(result.isEmpty()) throw new IllegalArgumentException("Leave requires at least one working portion");
         return result;
     }
 
     private void rejectOverlap(Long employee,Captured portion) {
-        Integer overlap=jdbc.queryForObject("SELECT count(id) FROM leave_occupancy WHERE employee_id=? AND active=TRUE AND start_at<? AND end_at>?",
-            Integer.class,employee,Timestamp.from(portion.end()),Timestamp.from(portion.start()));
+        Integer overlap=repository.countOverlappingOccupancy(employee, portion.end(), portion.start());
         if(overlap!=null && overlap>0) throw new LeaveConflictException("LEAVE_OVERLAP");
     }
 
     private void insertPortion(Request request,Employee employee,int revision,Captured portion) {
-        jdbc.update("INSERT INTO leave_portion(request_id,revision,employee_id,occurrence_id,work_date,half,start_at,end_at) VALUES (?,?,?,?,?,?,?,?)",
-            request.id(),revision,employee.getId(),portion.occurrence(),portion.date(),portion.half(),Timestamp.from(portion.start()),Timestamp.from(portion.end()));
-        Long id=jdbc.queryForObject("SELECT id FROM leave_portion WHERE request_id=? AND revision=? AND work_date=? AND half=?",Long.class,
-            request.id(),revision,portion.date(),portion.half());
-        jdbc.update("INSERT INTO leave_occupancy(portion_id,request_id,revision,employee_id,work_date,half,start_at,end_at) VALUES (?,?,?,?,?,?,?,?)",
-            id,request.id(),revision,employee.getId(),portion.date(),portion.half(),Timestamp.from(portion.start()),Timestamp.from(portion.end()));
+        repository.insertPortion(request.id(), revision, employee.getId(), portion.occurrence(), portion.date(), portion.half(), portion.start(), portion.end());
+        Long id=repository.findPortionId(request.id(), revision, portion.date(), portion.half());
+        repository.insertOccupancy(id, request.id(), revision, employee.getId(), portion.date(), portion.half(), portion.start(), portion.end());
     }
 
     private void decide(Request request,Employee employee,String outcome,String reason,Authentication caller) {
@@ -202,26 +195,25 @@ public class LeaveWorkflowService {
         requireReviewer(reviewer,actor,employee,step);
         if(!"APPROVE".equals(outcome)) requireReason(reason);
         if("APPROVE".equals(outcome) && step==2) {
-            List<UUID> manager=jdbc.query("SELECT reviewer_employee_public_id FROM leave_decision WHERE request_id=? AND revision=? AND step=1 AND outcome='APPROVE'",(rs,n)->rs.getObject(1,UUID.class),request.id(),request.revision());
+            List<UUID> manager=repository.findApprovingManagerEmployees(request.id(), request.revision());
             if(manager.isEmpty() || manager.getFirst().equals(reviewer.employee())) throw new LeaveConflictException("DISTINCT_REVIEWERS_REQUIRED");
-            int expected=jdbc.queryForObject("SELECT half_units FROM leave_revision WHERE request_id=? AND revision=?",Integer.class,request.id(),request.revision());
-            int occupied=jdbc.queryForObject("SELECT count(id) FROM leave_occupancy WHERE request_id=? AND revision=? AND active=TRUE",Integer.class,request.id(),request.revision());
+            int expected=repository.findRevisionHalfUnits(request.id(), request.revision());
+            int occupied=repository.countActiveOccupancy(request.id(), request.revision());
             if(expected!=occupied) throw new LeaveConflictException("RESERVATION_CHANGED");
             entitlement.consume(employee.getId(),request.from().getYear(),request.publicId(),request.revision());
         }
         requireReviewer(reviewer,access.requireActive(caller,clock.instant()),employee,step);
-        jdbc.update("INSERT INTO leave_decision(request_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,outcome,reason,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            request.id(),request.revision(),step,actor.getPublicId(),reviewer.employee(),outcome,reason,Timestamp.from(clock.instant()));
+        repository.insertDecision(request.id(), request.revision(), step, actor.getPublicId(), reviewer.employee(), outcome, reason, clock.instant());
         if("APPROVE".equals(outcome)) {
             if(step==2) transition(request,"APPROVED");
-            else jdbc.update("UPDATE leave_request SET version=version+1 WHERE id=?",request.id());
+            else repository.incrementRequestVersion(request.id());
         } else { release(request); transition(request,"RETURN".equals(outcome)?"RETURNED":"REJECTED"); }
     }
 
     private void release(Request request) {
         if(request.revision()==0) return;
         entitlement.release(request.employeeId(),request.from().getYear(),request.publicId(),request.revision());
-        jdbc.update("UPDATE leave_occupancy SET active=FALSE WHERE request_id=? AND revision=? AND active=TRUE",request.id(),request.revision());
+        repository.releaseOccupancy(request.id(), request.revision());
     }
 
     private void reassign(Request request,Employee employee,Action action,Authentication caller) {
@@ -231,43 +223,42 @@ public class LeaveWorkflowService {
         UUID candidate=action.reviewerAccountPublicId();
         if(!routing.eligible(candidate,employee.getPublicId(),currentUnit(employee),step,action.fallback(),clock.instant())) throw new IllegalArgumentException("Ineligible reviewer");
         if(step==2) {
-            List<UUID> completed=jdbc.query("SELECT reviewer_employee_public_id FROM leave_decision WHERE request_id=? AND revision=? AND step=1",(rs,n)->rs.getObject(1,UUID.class),request.id(),request.revision());
+            List<UUID> completed=repository.findManagerDecisionEmployees(request.id(), request.revision());
             if(!completed.isEmpty() && completed.getFirst().equals(routing.reviewerEmployee(candidate))) throw new IllegalArgumentException("Distinct reviewers required");
         } else if(routing.samePerson(candidate,reviewer(request,2).account())) throw new IllegalArgumentException("Distinct reviewers required");
-        jdbc.update("UPDATE leave_review_assignment SET active=FALSE WHERE request_id=? AND revision=? AND step=? AND active=TRUE",request.id(),request.revision(),step);
+        repository.deactivateStepAssignment(request.id(), request.revision(), step);
         insertAssignment(request.id(),request.revision(),step,candidate,action.fallback());
         recovery(request,"REASSIGN",action.reason());
-        jdbc.update("UPDATE leave_request SET version=version+1 WHERE id=?",request.id());
+        repository.incrementReassignedRequestVersion(request.id());
     }
 
     private void retryRoute(Request request,Employee employee,String reason,Authentication caller) {
         requireStatus(request,"PENDING"); requireReason(reason); requireHr(employee,caller);
         if(activeStep(request)!=1) throw new LeaveConflictException("ROUTE_ALREADY_DECIDED");
         if(blocked(request,employee)==null) throw new LeaveConflictException("ROUTE_NOT_BLOCKED");
-        UUID manager=jdbc.queryForObject("SELECT manager_employee_public_id FROM leave_revision WHERE request_id=? AND revision=?",UUID.class,request.id(),request.revision());
+        UUID manager=repository.findRevisionManager(request.id(), request.revision());
         Route route=routing.resolveWithManager(employee.getPublicId(),revisionUnit(request),manager,clock.instant());
-        jdbc.update("UPDATE leave_review_assignment SET active=FALSE WHERE request_id=? AND revision=? AND active=TRUE",request.id(),request.revision());
+        repository.deactivateAssignments(request.id(), request.revision());
         insertAssignment(request.id(),request.revision(),1,route.managerAccountPublicId(),false);
         insertAssignment(request.id(),request.revision(),2,route.hrAccountPublicId(),false);
         recordRoute(request.id(),request.revision(),null,route);
         recovery(request,"RETRY_ROUTE",reason);
-        jdbc.update("UPDATE leave_request SET version=version+1 WHERE id=?",request.id());
+        repository.incrementReroutedRequestVersion(request.id());
     }
 
     @Transactional(propagation=Propagation.MANDATORY)
     public CancellationView createCancellation(UUID requestId,UUID id,Action payload,Authentication caller) {
         Employee employee=lockEmployee(payload.employeePublicId()); requireOwner(employee,caller); requireReason(payload.reason());
         Request request=ownedRequest(requestId,employee,true); checkVersion(request,payload.expectedVersion()); requireStatus(request,"APPROVED");
-        if(!jdbc.query("SELECT id FROM leave_cancellation WHERE request_id=? AND status='PENDING'",(rs,n)->rs.getLong(1),request.id()).isEmpty()) throw new LeaveConflictException("CANCELLATION_PENDING");
+        if(!repository.findPendingCancellationIds(request.id()).isEmpty()) throw new LeaveConflictException("CANCELLATION_PENDING");
         String unit=currentUnit(employee);
         Route route=routing.resolve(employee.getId(),employee.getPublicId(),unit,clock.instant());
-        Long config=route.configurationPublicId()==null?null:jdbc.queryForObject("SELECT id FROM leave_rule_set WHERE public_id=?",Long.class,route.configurationPublicId());
-        jdbc.update("INSERT INTO leave_cancellation(public_id,request_id,status,reason,org_unit,rule_set_id,created_at) VALUES (?,?,'PENDING',?,?,?,?)",
-            id,request.id(),payload.reason(),unit,config,Timestamp.from(clock.instant()));
+        Long config=route.configurationPublicId()==null?null:repository.findCancellationRuleSetId(route.configurationPublicId());
+        repository.insertCancellation(id, request.id(), payload.reason(), unit, config, clock.instant());
         Cancellation cancellation=cancellation(id,false);
         insertCancellationAssignment(cancellation,route.cancellationAccountPublicId());
         recordRoute(request.id(),request.revision(),id,route);
-        jdbc.update("UPDATE leave_request SET version=version+1 WHERE id=?",request.id());
+        repository.incrementCancellationRequestVersion(request.id());
         return cancellationView(cancellation,request,employee);
     }
 
@@ -289,10 +280,10 @@ public class LeaveWorkflowService {
                 target=route.cancellationAccountPublicId(); recordRoute(request.id(),request.revision(),id,route);
             }
             if(target==null || !routing.eligible(target,employee.getPublicId(),currentUnit(employee),2,false,clock.instant())) throw new IllegalArgumentException("Ineligible cancellation reviewer");
-            jdbc.update("UPDATE leave_cancellation_assignment SET active=FALSE WHERE cancellation_id=? AND active=TRUE",cancel.id());
+            repository.deactivateCancellationAssignments(cancel.id());
             insertCancellationAssignment(cancel,target);
             recovery(request,"CANCEL_"+action,payload.reason());
-            jdbc.update("UPDATE leave_cancellation SET version=version+1 WHERE id=?",cancel.id());
+            repository.incrementCancellationVersion(cancel.id());
         } else if("APPROVE".equals(action) || "REJECT".equals(action)) {
             Reviewer reviewer=cancellationReviewer(cancel);
             UserAccount actor=access.requireActive(caller,clock.instant());
@@ -300,12 +291,11 @@ public class LeaveWorkflowService {
             if("REJECT".equals(action)) requireReason(payload.reason());
             if("APPROVE".equals(action)) {
                 entitlement.reverse(employee.getId(),request.from().getYear(),request.publicId(),request.revision());
-                jdbc.update("UPDATE leave_occupancy SET active=FALSE WHERE request_id=? AND revision=? AND active=TRUE",request.id(),request.revision());
+                repository.releaseCancelledOccupancy(request.id(), request.revision());
                 transition(request,"CANCELLED");
             }
             requireReviewer(reviewer,access.requireActive(caller,clock.instant()),employee,2);
-            jdbc.update("INSERT INTO leave_cancellation_decision(cancellation_id,reviewer_account_public_id,outcome,reason,created_at) VALUES (?,?,?,?,?)",
-                cancel.id(),actor.getPublicId(),action,payload.reason(),Timestamp.from(clock.instant()));
+            repository.insertCancellationDecision(cancel.id(), actor.getPublicId(), action, payload.reason(), clock.instant());
             transitionCancellation(cancel,"APPROVE".equals(action)?"APPROVED":"REJECTED");
         } else throw new IllegalArgumentException("Unsupported cancellation action");
         return cancellationView(cancellation(id,false),request(requestId,false),employee);
@@ -336,8 +326,7 @@ public class LeaveWorkflowService {
         if(after!=null) {
             Request previous=ownedRequest(after,employee,false); requireRead(previous,employee,caller); cursor=previous.id();
         }
-        List<Request> rows=jdbc.query("SELECT r.id,r.public_id,r.employee_id,r.status,r.revision,r.version,r.from_date,r.to_date,r.portion,r.reason FROM leave_request r WHERE r.employee_id=? AND r.id>? AND (? OR (r.status='PENDING' AND EXISTS (SELECT a.id FROM leave_review_assignment a WHERE a.request_id=r.id AND a.revision=r.revision AND a.step=1 AND a.active=TRUE AND a.reviewer_account_public_id=? AND a.reviewer_employee_public_id=?) AND NOT EXISTS (SELECT d.id FROM leave_decision d WHERE d.request_id=r.id AND d.revision=r.revision AND d.step=1 AND d.outcome='APPROVE'))) ORDER BY r.id LIMIT ?",
-            this::mapRequest,employee.getId(),cursor,scope.complete(),scope.reviewer(),scope.employee(),limit+1);
+        List<Request> rows=repository.findVisibleRequests(employee.getId(), cursor, scope.complete(), scope.reviewer(), scope.employee(), limit+1);
         boolean more=rows.size()>limit; List<Request> visible=more?rows.subList(0,limit):rows;
         List<RequestView> result=visible.stream().map(row->view(row,employee)).toList();
         listScope(employee,caller);
@@ -353,20 +342,17 @@ public class LeaveWorkflowService {
         throw new ResourceNotFoundException();
     }
 
-    private record RouteSnapshot(int step,UUID reviewerAccountPublicId,UUID reviewerEmployeePublicId,boolean fallback,boolean active) { }
+
     private record HistorySnapshot(RequestView request,List<RouteSnapshot> route,List<PortionView> portions,CancellationView cancellation) { }
     @Transactional(propagation=Propagation.MANDATORY)
     public void recordHistory(UUID requestId,UUID cancellationId,String action) {
         Request request=request(requestId,false);
         Employee employee=employees.findInternalById(request.employeeId()).orElseThrow(ResourceNotFoundException::new);
-        List<RouteSnapshot> route=jdbc.query("SELECT step,reviewer_account_public_id,reviewer_employee_public_id,fallback,active FROM leave_review_assignment WHERE request_id=? AND revision=? AND active=TRUE ORDER BY id",
-            (rs,n)->new RouteSnapshot(rs.getInt(1),rs.getObject(2,UUID.class),rs.getObject(3,UUID.class),rs.getBoolean(4),rs.getBoolean(5)),request.id(),request.revision());
-        List<PortionView> captured=jdbc.query("SELECT work_date,half,start_at,end_at FROM leave_portion WHERE request_id=? AND revision=? ORDER BY work_date,half",
-            (rs,n)->new PortionView(rs.getObject(1,LocalDate.class),rs.getInt(2),rs.getTimestamp(3).toInstant(),rs.getTimestamp(4).toInstant()),request.id(),request.revision());
+        List<RouteSnapshot> route=repository.findRouteSnapshot(request.id(), request.revision());
+        List<PortionView> captured=repository.findCapturedPortions(request.id(), request.revision()).stream().map(LeaveWorkflowMapper::toPortionView).toList();
         CancellationView cancellation=cancellationId==null?null:cancellationView(cancellation(cancellationId,false),request,employee);
         String payload=mapper.writeValueAsString(new HistorySnapshot(view(request,employee),route,captured,cancellation));
-        jdbc.update("INSERT INTO leave_history(public_id,request_id,cancellation_public_id,revision,action,payload,created_at) VALUES (?,?,?,?,?,?,?)",
-            UUID.randomUUID(),request.id(),cancellationId,request.revision(),action,payload,Timestamp.from(clock.instant()));
+        repository.insertHistory(UUID.randomUUID(), request.id(), cancellationId, request.revision(), action, payload, clock.instant());
     }
 
     @Transactional
@@ -374,10 +360,8 @@ public class LeaveWorkflowService {
         requireLimit(limit); get(requestId,caller); Request request=request(requestId,false);
         if(cancellationId!=null) getCancellation(requestId,cancellationId,caller);
         long cursor=0;
-        if(after!=null) cursor=jdbc.query("SELECT id FROM leave_history WHERE public_id=? AND request_id=? AND (CAST(? AS UUID) IS NULL OR cancellation_public_id=?)",
-            (rs,n)->rs.getLong(1),after,request.id(),cancellationId,cancellationId).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
-        List<TimelineEntry> rows=jdbc.query("SELECT public_id,action,revision,cancellation_public_id,payload,created_at FROM leave_history WHERE request_id=? AND id>? AND (CAST(? AS UUID) IS NULL OR cancellation_public_id=?) ORDER BY id LIMIT ?",
-            (rs,n)->new TimelineEntry(rs.getObject(1,UUID.class),rs.getString(2),rs.getInt(3),rs.getObject(4,UUID.class),mapper.readTree(rs.getString(5)),rs.getTimestamp(6).toInstant()),request.id(),cursor,cancellationId,cancellationId,limit+1);
+        if(after!=null) cursor=repository.findHistoryCursor(after, request.id(), cancellationId, cancellationId).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+        List<TimelineEntry> rows=repository.findTimeline(request.id(), cursor, cancellationId, cancellationId, limit+1).stream().map(LeaveWorkflowMapper::toTimelineEntry).toList();
         boolean more=rows.size()>limit; List<TimelineEntry> result=more?rows.subList(0,limit):rows;
         get(requestId,caller); return new TimelinePage(result,more?result.getLast().publicId():null);
     }
@@ -391,10 +375,8 @@ public class LeaveWorkflowService {
         boolean locked=lockRead(employee); listScope(employee,caller);
         if(!locked) return new SummaryPage(List.of(),null);
         long cursor=0;
-        if(after!=null) cursor=jdbc.query("SELECT p.id FROM leave_portion p JOIN leave_request r ON r.id=p.request_id WHERE p.public_id=? AND r.employee_id=? AND p.work_date>=? AND p.work_date<? AND r.status IN ('APPROVED','CANCELLED')",
-            (rs,n)->rs.getLong(1),after,employee.getId(),from,to).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
-        List<Summary> rows=jdbc.query("SELECT p.public_id,r.public_id,p.work_date,p.half,p.start_at,p.end_at,r.status FROM leave_portion p JOIN leave_request r ON r.id=p.request_id AND r.revision=p.revision WHERE r.employee_id=? AND p.work_date>=? AND p.work_date<? AND r.status IN ('APPROVED','CANCELLED') AND p.id>? ORDER BY p.id LIMIT ?",
-            (rs,n)->new Summary(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),rs.getObject(3,LocalDate.class),rs.getInt(4),rs.getTimestamp(5).toInstant(),rs.getTimestamp(6).toInstant(),rs.getString(7)),employee.getId(),from,to,cursor,limit+1);
+        if(after!=null) cursor=repository.findSummaryCursor(after, employee.getId(), from, to).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+        List<Summary> rows=repository.findSummary(employee.getId(), from, to, cursor, limit+1).stream().map(LeaveWorkflowMapper::toSummary).toList();
         boolean more=rows.size()>limit; List<Summary> result=more?rows.subList(0,limit):rows;
         listScope(employee,caller); return new SummaryPage(result,more?result.getLast().publicId():null);
     }
@@ -402,16 +384,14 @@ public class LeaveWorkflowService {
     @Transactional
     public List<History> history(UUID id,Authentication caller) {
         get(id,caller); Request request=request(id,false);
-        List<History> result=jdbc.query("SELECT revision,step,reviewer_account_public_id,outcome,reason,created_at FROM leave_decision WHERE request_id=? ORDER BY id",
-            (rs,n)->new History(rs.getInt(1),rs.getInt(2),rs.getObject(3,UUID.class),rs.getString(4),rs.getString(5),rs.getTimestamp(6).toInstant()),request.id());
+        List<History> result=repository.findDecisionHistory(request.id()).stream().map(LeaveWorkflowMapper::toHistory).toList();
         get(id,caller); return result;
     }
 
     @Transactional
     public List<PortionView> portions(UUID id,Authentication caller) {
         get(id,caller); Request request=request(id,false);
-        List<PortionView> result=jdbc.query("SELECT work_date,half,start_at,end_at FROM leave_portion WHERE request_id=? AND revision=? ORDER BY work_date,half",
-            (rs,n)->new PortionView(rs.getObject(1,LocalDate.class),rs.getInt(2),rs.getTimestamp(3).toInstant(),rs.getTimestamp(4).toInstant()),request.id(),request.revision());
+        List<PortionView> result=repository.findPortions(request.id(), request.revision()).stream().map(LeaveWorkflowMapper::toPortionView).toList();
         get(id,caller); return result;
     }
 
@@ -430,8 +410,7 @@ public class LeaveWorkflowService {
     public List<History> cancellationHistory(UUID requestId,UUID id,Authentication caller) {
         getCancellation(requestId,id,caller);
         Cancellation cancel=cancellation(id,false);
-        List<History> result=jdbc.query("SELECT reviewer_account_public_id,outcome,reason,created_at FROM leave_cancellation_decision WHERE cancellation_id=? ORDER BY id",
-            (rs,n)->new History(1,1,rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getTimestamp(4).toInstant()),cancel.id());
+        List<History> result=repository.findCancellationHistory(cancel.id()).stream().map(LeaveWorkflowMapper::toHistory).toList();
         getCancellation(requestId,id,caller); return result;
     }
 
@@ -563,7 +542,7 @@ public class LeaveWorkflowService {
             || !routing.eligible(reviewer.account(),employee.getPublicId(),currentUnit(employee),step,reviewer.fallback(),clock.instant())) throw new AccessDeniedException("Current assigned eligible reviewer required");
     }
     private String currentUnit(Employee employee) { return employees.currentOrgUnit(employee.getId(),clock.instant()).orElse(null); }
-    private String revisionUnit(Request request) { return jdbc.queryForObject("SELECT org_unit FROM leave_revision WHERE request_id=? AND revision=?",String.class,request.id(),request.revision()); }
+    private String revisionUnit(Request request) { return repository.findRevisionUnit(request.id(), request.revision()); }
     private Request ownedRequest(UUID id,Employee employee,boolean lock) {
         Request request=request(id,false);
         if(!request.employeeId().equals(employee.getId())) throw new ResourceNotFoundException();
@@ -574,20 +553,18 @@ public class LeaveWorkflowService {
         return request;
     }
     private Request request(UUID id,boolean lock) {
-        return jdbc.query("SELECT "+COLUMNS+" FROM leave_request WHERE public_id=?"+(lock?" FOR UPDATE":""),this::mapRequest,id)
+        return repository.findRequest(lock, id)
             .stream().findFirst().orElseThrow(ResourceNotFoundException::new);
     }
-    private Request mapRequest(ResultSet rs,int n) throws SQLException {
-        return new Request(rs.getLong("id"),rs.getObject("public_id",UUID.class),rs.getLong("employee_id"),rs.getString("status"),rs.getInt("revision"),rs.getLong("version"),rs.getObject("from_date",LocalDate.class),rs.getObject("to_date",LocalDate.class),Portion.valueOf(rs.getString("portion")),rs.getString("reason"));
-    }
+
     private RequestView view(Request request,Employee employee) {
-        return new RequestView(request.publicId(),employee.getPublicId(),request.status(),request.revision(),request.version(),request.from(),request.to(),request.portion(),request.reason(),blocked(request,employee));
+        return new RequestView(request.publicId(),employee.getPublicId(),request.status(),request.revision(),request.version(),request.from(),request.to(),Portion.valueOf(request.portion()),request.reason(),blocked(request,employee));
     }
     private String blocked(Request request,Employee employee) {
         if(!"PENDING".equals(request.status())) return null;
         int step=activeStep(request); Reviewer current=reviewer(request,step);
         if(current.account()==null) {
-            List<String> reasons=jdbc.query("SELECT blocked_reason FROM leave_route_evaluation WHERE request_id=? AND revision=? AND cancellation_public_id IS NULL ORDER BY id DESC LIMIT 1",(rs,n)->rs.getString(1),request.id(),request.revision());
+            List<String> reasons=repository.findBlockedReasons(request.id(), request.revision());
             return reasons.isEmpty() || reasons.getFirst()==null?"NO_DESIGNATED_REVIEWER":reasons.getFirst();
         }
         if(!Objects.equals(current.employee(),boundEmployee(current.account()))) return "REVIEWER_INELIGIBLE";
@@ -596,20 +573,19 @@ public class LeaveWorkflowService {
         return null;
     }
     private int activeStep(Request request) {
-        Integer first=jdbc.queryForObject("SELECT count(id) FROM leave_decision WHERE request_id=? AND revision=? AND step=1 AND outcome='APPROVE'",Integer.class,request.id(),request.revision()); return first!=null && first>0?2:1;
+        Integer first=repository.countManagerApprovals(request.id(), request.revision()); return first!=null && first>0?2:1;
     }
     private Reviewer reviewer(Request request,int step) {
-        return jdbc.query("SELECT reviewer_account_public_id,reviewer_employee_public_id,fallback FROM leave_review_assignment WHERE request_id=? AND revision=? AND step=? AND active=TRUE",
-            (rs,n)->new Reviewer(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),rs.getBoolean(3)),request.id(),request.revision(),step).stream().findFirst().orElse(new Reviewer(null,null,false));
+        return repository.findReviewer(request.id(), request.revision(), step).stream().findFirst().orElse(new Reviewer(null,null,false));
     }
     private void insertAssignment(Long request,int revision,int step,UUID account,boolean fallback) {
         UUID employee=boundEmployee(account);
-        jdbc.update("INSERT INTO leave_review_assignment(request_id,revision,step,reviewer_account_public_id,reviewer_employee_public_id,fallback,created_at) VALUES (?,?,?,?,?,?,?)",request,revision,step,account,employee,fallback,Timestamp.from(clock.instant()));
+        repository.insertAssignment(request, revision, step, account, employee, fallback, clock.instant());
     }
     private void recovery(Request request,String action,String reason) {
-        jdbc.update("INSERT INTO leave_recovery(request_id,revision,action,reason,created_at) VALUES (?,?,?,?,?)",request.id(),request.revision(),action,reason,Timestamp.from(clock.instant()));
+        repository.insertRecovery(request.id(), request.revision(), action, reason, clock.instant());
     }
-    private void transition(Request request,String status) { jdbc.update("UPDATE leave_request SET status=?,version=version+1 WHERE id=?",status,request.id()); }
+    private void transition(Request request,String status) { repository.transitionRequest(status, request.id()); }
     private void checkVersion(Request request,long version) { if(request.version()!=version) throw new LeaveConflictException("VERSION_CHANGED"); }
     private void requireStatus(Request request,String... allowed) { if(!List.of(allowed).contains(request.status())) throw new LeaveConflictException("REQUEST_STALE"); }
     private void requireReason(String reason) { if(!StringUtils.hasText(reason) || reason.length()>2000) throw new IllegalArgumentException("Reason is required and limited to 2000 characters"); }
@@ -619,25 +595,22 @@ public class LeaveWorkflowService {
             || draft.fromDate().getYear()!=draft.toDate().getYear() || draft.portion()!=Portion.FULL && !draft.fromDate().equals(draft.toDate())) throw new IllegalArgumentException("Invalid annual leave dates");
     }
     private Cancellation cancellation(UUID id,boolean lock) {
-        return jdbc.query("SELECT id,public_id,request_id,status,version,reason,org_unit FROM leave_cancellation WHERE public_id=?"+(lock?" FOR UPDATE":""),
-            (rs,n)->new Cancellation(rs.getLong(1),rs.getObject(2,UUID.class),rs.getLong(3),rs.getString(4),rs.getLong(5),rs.getString(6),rs.getString(7)),id).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
+        return repository.findCancellation(lock, id).stream().findFirst().orElseThrow(ResourceNotFoundException::new);
     }
     private Reviewer cancellationReviewer(Cancellation cancel) {
-        return jdbc.query("SELECT reviewer_account_public_id,reviewer_employee_public_id FROM leave_cancellation_assignment WHERE cancellation_id=? AND active=TRUE",
-            (rs,n)->new Reviewer(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),false),cancel.id()).stream().findFirst().orElse(new Reviewer(null,null,false));
+        return repository.findCancellationReviewer(cancel.id()).stream().findFirst().orElse(new Reviewer(null,null,false));
     }
     private void insertCancellationAssignment(Cancellation cancel,UUID account) {
-        jdbc.update("INSERT INTO leave_cancellation_assignment(cancellation_id,reviewer_account_public_id,reviewer_employee_public_id,created_at) VALUES (?,?,?,?)",cancel.id(),account,boundEmployee(account),Timestamp.from(clock.instant()));
+        repository.insertCancellationAssignment(cancel.id(), account, boundEmployee(account), clock.instant());
     }
     private CancellationView cancellationView(Cancellation cancel,Request request,Employee employee) {
         Reviewer reviewer=cancellationReviewer(cancel);
         String blocked="PENDING".equals(cancel.status()) && (reviewer.account()==null || !Objects.equals(reviewer.employee(),boundEmployee(reviewer.account())) || !routing.eligible(reviewer.account(),employee.getPublicId(),currentUnit(employee),2,false,clock.instant()))?"REVIEWER_INELIGIBLE":null;
         return new CancellationView(cancel.publicId(),request.publicId(),cancel.status(),cancel.version(),cancel.reason(),blocked);
     }
-    private void transitionCancellation(Cancellation cancel,String status) { jdbc.update("UPDATE leave_cancellation SET status=?,version=version+1 WHERE id=?",status,cancel.id()); }
+    private void transitionCancellation(Cancellation cancel,String status) { repository.transitionCancellation(status, cancel.id()); }
     private void recordRoute(Long request,int revision,UUID cancellation,Route route) {
-        jdbc.update("INSERT INTO leave_route_evaluation(request_id,revision,cancellation_public_id,configuration_public_id,manager_account_public_id,hr_account_public_id,cancellation_account_public_id,blocked_reason,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            request,revision,cancellation,route.configurationPublicId(),route.managerAccountPublicId(),route.hrAccountPublicId(),route.cancellationAccountPublicId(),route.blockedReason(),Timestamp.from(clock.instant()));
+        repository.insertRouteEvaluation(request, revision, cancellation, route.configurationPublicId(), route.managerAccountPublicId(), route.hrAccountPublicId(), route.cancellationAccountPublicId(), route.blockedReason(), clock.instant());
     }
     private boolean lockRead(Employee employee) { boolean locked=entitlement.lockExisting(employee.getId()); entities.clear(); return locked; }
     private UUID boundEmployee(UUID account) { return account==null?null:access.findAccountByPublicId(account).flatMap(access::ownEmployeePublicId).orElse(null); }

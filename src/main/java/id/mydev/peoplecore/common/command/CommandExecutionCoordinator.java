@@ -4,11 +4,8 @@ import org.springframework.beans.factory.annotation.Value;
 import id.mydev.peoplecore.common.api.PayloadLimits;
 import tools.jackson.core.json.JsonFactory;
 import tools.jackson.core.ObjectReadContext;
-import org.springframework.dao.DataAccessException;
-import java.sql.SQLException;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.Assert;
@@ -23,17 +20,17 @@ import java.util.Map;
 
 @Component
 public class CommandExecutionCoordinator {
-    private final JdbcTemplate jdbcTemplate;
+    private final CommandLockRepository locks;
     private final ObjectMapper objectMapper;
     private final int lockTimeoutMs;
     private final JsonFactory inputFactory = JsonFactory.builder()
         .streamReadConstraints(PayloadLimits.JSON_CONSTRAINTS)
         .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
 
-    public CommandExecutionCoordinator(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
+    public CommandExecutionCoordinator(CommandLockRepository locks, ObjectMapper objectMapper,
                                       @Value("${peoplecore.command.lock-timeout-ms:2000}") int lockTimeoutMs) {
         Assert.isTrue(lockTimeoutMs > 0, "Command lock timeout must be positive");
-        this.jdbcTemplate = jdbcTemplate;
+        this.locks = locks;
         this.objectMapper = objectMapper;
         this.lockTimeoutMs = lockTimeoutMs;
     }
@@ -42,17 +39,7 @@ public class CommandExecutionCoordinator {
         Assert.state(TransactionSynchronizationManager.isActualTransactionActive(), "Command coordination requires a transaction");
         String identity = actorId.length() + ":" + actorId + commandType.length() + ":" + commandType + key.length() + ":" + key;
         long lockKey = ByteBuffer.wrap(HexFormat.of().parseHex(CommandExecutionService.computeSha256(identity))).getLong();
-        String previousTimeout = jdbcTemplate.queryForObject("show lock_timeout", String.class);
-        jdbcTemplate.queryForObject("select set_config('lock_timeout', ?, true)", String.class, lockTimeoutMs + "ms");
-        try {
-            jdbcTemplate.query("select pg_advisory_xact_lock(?)", rs -> { }, lockKey);
-        } catch (DataAccessException ex) {
-            if (ex.getMostSpecificCause() instanceof SQLException sql && "55P03".equals(sql.getSQLState())) {
-                throw new CommandBusyException("Command lock wait timed out", ex);
-            }
-            throw ex;
-        }
-        jdbcTemplate.queryForObject("select set_config('lock_timeout', ?, true)", String.class, previousTimeout);
+        locks.lock(lockKey, lockTimeoutMs);
     }
 
     public String requestHash(String payload) {

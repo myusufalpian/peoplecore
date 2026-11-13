@@ -4,6 +4,7 @@ import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
 import id.mydev.peoplecore.reimbursement.application.service.ReimbursementCategoryService.Category;
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementCategoryRepository;
 import id.mydev.peoplecore.support.PostgresFixture;
 import java.time.Clock;
 import java.time.Instant;
@@ -28,6 +29,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import id.mydev.peoplecore.common.command.AdmissionGuard;
+import jakarta.persistence.EntityManager;
+import org.springframework.security.access.AccessDeniedException;
 
 @Tag("postgres")
 class ReimbursementCategoryPostgresTest {
@@ -56,7 +60,7 @@ class ReimbursementCategoryPostgresTest {
             assertEquals(1, transactions.execute(status -> service.applicable(LocalDate.of(2026, 11, 1), 10, null, caller)).items().size());
 
             when(access.hasScopedRole(eq(1L), eq(HrisRole.FINANCE_PAYROLL), isNull(), any())).thenReturn(false);
-            assertThrows(org.springframework.security.access.AccessDeniedException.class, () -> transactions.executeWithoutResult(status ->
+            assertThrows(AccessDeniedException.class, () -> transactions.executeWithoutResult(status ->
                 service.publish(UUID.randomUUID(), new Category("MEAL", LocalDate.of(2026, 1, 1), null, 100), caller)));
         }
     }
@@ -112,7 +116,7 @@ class ReimbursementCategoryPostgresTest {
             assertTrue(transactions.execute(status -> service.applicable(LocalDate.of(2025, 12, 31), 2, null, caller)).items().isEmpty());
 
             when(access.hasRole(eq(1L), eq(HrisRole.HR_ADMIN), any())).thenReturn(true, false);
-            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+            assertThrows(AccessDeniedException.class,
                 () -> transactions.execute(status -> service.applicable(LocalDate.of(2026, 11, 1), 2, null, caller)));
         }
     }
@@ -127,9 +131,9 @@ class ReimbursementCategoryPostgresTest {
             when(account.getId()).thenReturn(1L);
             when(access.requireActive(eq(caller), any())).thenReturn(account);
             when(access.hasScopedRole(eq(1L), eq(HrisRole.HR_ADMIN), isNull(), any())).thenReturn(true);
-            var service = new ReimbursementCategoryService(fixture.jdbc, access,
+            var service = new ReimbursementCategoryService(new JdbcReimbursementCategoryRepository(fixture.jdbc), access,
                 Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC),
-                mock(id.mydev.peoplecore.common.command.AdmissionGuard.class), mock(jakarta.persistence.EntityManager.class));
+                mock(AdmissionGuard.class), mock(EntityManager.class));
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(fixture.jdbc.getDataSource()));
             UUID original = UUID.randomUUID();
             UUID replacement = UUID.randomUUID();
@@ -158,7 +162,7 @@ class ReimbursementCategoryPostgresTest {
             assertThrows(IllegalArgumentException.class,
                 () -> transactions.execute(status -> service.applicable(LocalDate.of(2026, 7, 1), 101, null, caller)));
             when(access.hasRole(eq(1L), eq(HrisRole.HR_ADMIN), any())).thenReturn(false);
-            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+            assertThrows(AccessDeniedException.class,
                 () -> transactions.execute(status -> service.applicable(LocalDate.of(2026, 7, 1), 1, null, caller)));
             assertThrows(ReimbursementConflictException.class, () -> transactions.executeWithoutResult(status -> service.publish(UUID.randomUUID(),
                 new Category("TRAVEL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 8, 1), 300), caller)));
@@ -180,8 +184,8 @@ class ReimbursementCategoryPostgresTest {
     }
 
     private static ReimbursementCategoryService categoryService(PostgresFixture fixture, AccountAccessService access) {
-        return new ReimbursementCategoryService(fixture.jdbc, access,
+        return new ReimbursementCategoryService(new JdbcReimbursementCategoryRepository(fixture.jdbc), access,
             Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC),
-            mock(id.mydev.peoplecore.common.command.AdmissionGuard.class), mock(jakarta.persistence.EntityManager.class));
+            mock(AdmissionGuard.class), mock(EntityManager.class));
     }
 }

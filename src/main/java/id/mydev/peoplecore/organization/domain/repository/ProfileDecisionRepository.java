@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface ProfileDecisionRepository extends JpaRepository<ProfileDecision, Long> {
-    List<ProfileDecision> findByProposalIdOrderByCreatedAtDescIdDesc(Long proposalId, org.springframework.data.domain.Pageable pageable);
+    List<ProfileDecision> findByProposalIdOrderByCreatedAtDescIdDesc(Long proposalId, Pageable pageable);
     long countByProposalId(Long proposalId);
     List<ProfileDecision> findByProposalIdOrderByCreatedAtAsc(Long proposalId);
 

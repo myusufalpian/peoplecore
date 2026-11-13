@@ -10,7 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.jdbc.core.JdbcTemplate;
+import id.mydev.peoplecore.document.domain.repository.DocumentVerificationRepository;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -21,10 +21,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 @ConditionalOnProperty(prefix = "peoplecore.documents.verification", name = {"lease", "poll-interval", "retry-delay"})
 public class DocumentVerificationConfig {
     @Bean
-    DocumentVerificationWorker documentVerificationWorker(JdbcTemplate jdbc, PlatformTransactionManager transactions,
+    DocumentVerificationWorker documentVerificationWorker(DocumentVerificationRepository repository, PlatformTransactionManager transactions,
             PrivateDocumentStorage storage, ClamAvScanner scanner, DocumentFormatVerifier formatVerifier,
             @Value("${peoplecore.documents.verification.lease}") String lease) {
-        return new DocumentVerificationWorker(jdbc, transactions, storage, scanner, formatVerifier, Duration.parse(lease));
+        return new DocumentVerificationWorker(repository, transactions, storage, scanner, formatVerifier, Duration.parse(lease));
     }
 
     @Bean

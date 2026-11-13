@@ -41,6 +41,9 @@ import java.time.Instant;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 @Component
 public class EnrollmentCommands {
@@ -78,7 +81,7 @@ public class EnrollmentCommands {
         var payload = new IssueInvitationPayload(employeeId, invitationId, intendedIdentityRef,
             expectedIssuer, expectedSubject, null);
         var context = commandContext(caller, COMMAND_ISSUE, idempotencyKey, payload);
-        var secret = new java.util.concurrent.atomic.AtomicReference<String>();
+        var secret = new AtomicReference<String>();
         InvitationResult result = execute(context,
             () -> {
                 IssuedInvitation issued = enrollments.issue(employeeId, invitationId, intendedIdentityRef,
@@ -100,7 +103,7 @@ public class EnrollmentCommands {
         var payload = new IssueInvitationPayload(employeeId, invitationId, intendedIdentityRef,
             expectedIssuer, expectedSubject, null);
         var context = commandContext(caller, COMMAND_REISSUE, idempotencyKey, payload);
-        var secret = new java.util.concurrent.atomic.AtomicReference<String>();
+        var secret = new AtomicReference<String>();
         InvitationResult result = execute(context,
             () -> {
                 IssuedInvitation issued = enrollments.reissue(employeeId, invitationId, intendedIdentityRef,
@@ -190,10 +193,10 @@ public class EnrollmentCommands {
                 trail.accessRestoredEvent(result, reason)));
     }
 
-    private <T> T execute(CommandContext context, java.util.function.Supplier<T> action,
+    private <T> T execute(CommandContext context, Supplier<T> action,
                           Class<T> resultType,
-                          java.util.function.Function<T, AuditDescriptor> audit,
-                          java.util.function.Function<T, OutboxDescriptor> outbox) {
+                          Function<T, AuditDescriptor> audit,
+                          Function<T, OutboxDescriptor> outbox) {
         return CommandRetry.withRetry(() -> commands.executeCommand(context, action, resultType, audit, outbox));
     }
 

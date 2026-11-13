@@ -1,5 +1,6 @@
 package id.mydev.peoplecore.reimbursement.application.service;
 
+import id.mydev.peoplecore.reimbursement.infrastructure.persistence.JdbcReimbursementWorkflowRepository;
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
@@ -65,7 +66,7 @@ class ReimbursementReadAuthorizationTest {
         private final ReimbursementWorkflowService service;
 
         private Scenario(boolean becomeTerminal) {
-            service = new ReimbursementWorkflowService(jdbc, employees, access, mock(ReimbursementSubmissionService.class),
+            service = new ReimbursementWorkflowService(new JdbcReimbursementWorkflowRepository(jdbc), employees, access, mock(ReimbursementSubmissionService.class),
                 mock(ReimbursementCategoryService.class), mock(EntityManager.class), mock(AdmissionGuard.class),
                 Clock.fixed(NOW, ZoneOffset.UTC));
             when(employee.getId()).thenReturn(10L);

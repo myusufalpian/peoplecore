@@ -15,14 +15,12 @@ import id.mydev.peoplecore.attendance.domain.repository.HolidayCalendarRevisionR
 import id.mydev.peoplecore.attendance.domain.repository.HolidayDateRepository;
 import id.mydev.peoplecore.attendance.domain.repository.WorkScheduleDayRepository;
 import id.mydev.peoplecore.attendance.domain.repository.WorkScheduleRevisionRepository;
-import jakarta.persistence.EntityManager;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
+import id.mydev.peoplecore.attendance.domain.repository.AttendanceOccurrenceWriteRepository;
+import id.mydev.peoplecore.attendance.domain.repository.AttendanceOccurrenceWriteRepository.OccurrenceValues;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Connection;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -31,7 +29,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
 
 @Service
 public class AttendanceOccurrenceResolver {
@@ -44,10 +44,8 @@ public class AttendanceOccurrenceResolver {
     private final HolidayCalendarRevisionRepository calendarRevisions;
     private final WorkScheduleDayRepository scheduleDays;
     private final HolidayDateRepository holidayDates;
-    private final JdbcTemplate jdbc;
-    private final EntityManager entities;
+    private final AttendanceOccurrenceWriteRepository occurrenceWrites;
     private final Clock clock;
-    private final boolean postgres;
 
     public AttendanceOccurrenceResolver(
         AttendanceAccountGuard accountGuard,
@@ -58,8 +56,7 @@ public class AttendanceOccurrenceResolver {
         HolidayCalendarRevisionRepository calendarRevisions,
         WorkScheduleDayRepository scheduleDays,
         HolidayDateRepository holidayDates,
-        JdbcTemplate jdbc,
-        EntityManager entities,
+        AttendanceOccurrenceWriteRepository occurrenceWrites,
         Clock clock
     ) {
         this.accountGuard = accountGuard;
@@ -70,10 +67,8 @@ public class AttendanceOccurrenceResolver {
         this.calendarRevisions = calendarRevisions;
         this.scheduleDays = scheduleDays;
         this.holidayDates = holidayDates;
-        this.jdbc = jdbc;
-        this.entities = entities;
+        this.occurrenceWrites = occurrenceWrites;
         this.clock = clock;
-        this.postgres = detectPostgres(jdbc);
     }
 
     public record EffectiveOccurrence(Instant startAt, Instant endAt, String timezone,
@@ -145,10 +140,10 @@ public class AttendanceOccurrenceResolver {
         }
         var scheduleTimeline = scheduleAssignments.findOverlapping(employeeId, from, to);
         var calendarTimeline = calendarAssignments.findOverlapping(employeeId, from, to);
-        var schedules = new java.util.HashMap<Long, WorkScheduleRevision>();
-        var calendars = new java.util.HashMap<Long, HolidayCalendarRevision>();
-        var days = new java.util.HashMap<Long, List<WorkScheduleDay>>();
-        var holidays = new java.util.HashMap<Long, java.util.Map<LocalDate, String>>();
+        var schedules = new HashMap<Long, WorkScheduleRevision>();
+        var calendars = new HashMap<Long, HolidayCalendarRevision>();
+        var days = new HashMap<Long, List<WorkScheduleDay>>();
+        var holidays = new HashMap<Long, Map<LocalDate, String>>();
         var scheduleIds = scheduleTimeline.stream().map(EmployeeScheduleAssignment::getRevisionId).distinct().toList();
         var calendarIds = calendarTimeline.stream().map(EmployeeCalendarAssignment::getRevisionId).distinct().toList();
         scheduleRevisions.findAllById(scheduleIds).forEach(r -> schedules.put(r.getId(), r));
@@ -160,11 +155,11 @@ public class AttendanceOccurrenceResolver {
         }
         if (!calendarIds.isEmpty()) {
             for (var day : holidayDates.findByRevisionIdInAndHolidayDayBetween(calendarIds, from, to.minusDays(1))) {
-                holidays.computeIfAbsent(day.getRevisionId(), ignored -> new java.util.HashMap<>())
+                holidays.computeIfAbsent(day.getRevisionId(), ignored -> new HashMap<>())
                     .put(day.getHolidayDay(), day.getHolidayName());
             }
         }
-        var pins = new java.util.HashMap<LocalDate, AttendanceOccurrence>();
+        var pins = new HashMap<LocalDate, AttendanceOccurrence>();
         occurrences.findByEmployeeIdAndWorkDateBetweenOrderByWorkDateAsc(employeeId, from, to.minusDays(1))
             .forEach(pin -> pins.put(pin.getWorkDate(), pin));
         List<ContextDate> result = new ArrayList<>();
@@ -177,7 +172,7 @@ public class AttendanceOccurrenceResolver {
                 var context = selectContext(date, scheduleTimeline, calendarTimeline,
                     id -> Optional.ofNullable(schedules.get(id)), id -> Optional.ofNullable(calendars.get(id)));
                 var effective = buildEffective(date, context, days.getOrDefault(context.schedule().getId(), List.of()),
-                    holidays.getOrDefault(context.calendar().getId(), java.util.Map.of()).get(date));
+                    holidays.getOrDefault(context.calendar().getId(), Map.of()).get(date));
                 result.add(new ContextDate(date, null, effective, null));
             } catch (WorkContextException ex) {
                 result.add(new ContextDate(date, null, null, ex.getReason()));
@@ -187,32 +182,10 @@ public class AttendanceOccurrenceResolver {
     }
 
     private void insertConflictSafe(Long employeeId, LocalDate workDate, EffectiveOccurrence effective) {
-        UUID publicId = UUID.randomUUID();
-        java.sql.Timestamp createdAt = java.sql.Timestamp.from(Instant.now(clock));
-        if (postgres) {
-            jdbc.update("INSERT INTO attendance_occurrence(public_id, employee_id, work_date, "
-                + "start_at, end_at, timezone, schedule_revision_id, calendar_revision_id, "
-                + "schedule_assignment_id, calendar_assignment_id, holiday_name, created_at) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                + "ON CONFLICT (employee_id, work_date) DO NOTHING",
-                publicId, employeeId, workDate,
-                java.sql.Timestamp.from(effective.startAt()), java.sql.Timestamp.from(effective.endAt()),
-                effective.timezone(), effective.scheduleRevisionId(), effective.calendarRevisionId(),
-                effective.scheduleAssignmentId(), effective.calendarAssignmentId(),
-                effective.holidayName(), createdAt);
-            entities.flush();
-            entities.clear();
-            return;
-        }
-        try {
-            occurrences.saveAndFlush(new AttendanceOccurrence(publicId, employeeId, workDate,
-                effective.startAt(), effective.endAt(), effective.timezone(),
-                effective.scheduleRevisionId(), effective.calendarRevisionId(),
-                effective.scheduleAssignmentId(), effective.calendarAssignmentId(),
-                effective.holidayName(), createdAt.toInstant()));
-        } catch (DataAccessException ex) {
-            entities.clear();
-        }
+        occurrenceWrites.insertConflictSafe(employeeId, workDate,
+            new OccurrenceValues(effective.startAt(), effective.endAt(), effective.timezone(),
+                effective.scheduleRevisionId(), effective.calendarRevisionId(), effective.scheduleAssignmentId(),
+                effective.calendarAssignmentId(), effective.holidayName()), Instant.now(clock));
     }
 
     private ResolvedContext selectContext(Long employeeId, LocalDate workDate) {
@@ -223,8 +196,8 @@ public class AttendanceOccurrenceResolver {
 
     private ResolvedContext selectContext(LocalDate workDate,
         List<EmployeeScheduleAssignment> scheduleTimeline, List<EmployeeCalendarAssignment> calendarTimeline,
-        java.util.function.Function<Long, Optional<WorkScheduleRevision>> scheduleLookup,
-        java.util.function.Function<Long, Optional<HolidayCalendarRevision>> calendarLookup) {
+        Function<Long, Optional<WorkScheduleRevision>> scheduleLookup,
+        Function<Long, Optional<HolidayCalendarRevision>> calendarLookup) {
         var schedules = scheduleTimeline.stream().filter(a -> a.covers(workDate)).toList();
         if (schedules.isEmpty()) {
             throw new WorkContextException(WorkContextException.MISSING_SCHEDULE,
@@ -298,16 +271,6 @@ public class AttendanceOccurrenceResolver {
         Optional<HolidayDate> holiday =
             holidayDates.findByRevisionIdAndHolidayDay(calendarRevisionId, workDate);
         return holiday.map(HolidayDate::getHolidayName).orElse(null);
-    }
-
-    private static boolean detectPostgres(JdbcTemplate jdbc) {
-        try {
-            String product = jdbc.execute((Connection connection) ->
-                connection.getMetaData().getDatabaseProductName());
-            return "PostgreSQL".equals(product);
-        } catch (DataAccessException ex) {
-            return false;
-        }
     }
 
     private record ResolvedContext(EmployeeScheduleAssignment scheduleAssignment,

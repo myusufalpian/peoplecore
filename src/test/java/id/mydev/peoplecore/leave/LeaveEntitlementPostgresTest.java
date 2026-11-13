@@ -34,6 +34,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.concurrent.ExecutionException;
 
 @Tag("postgres")
 @SpringBootTest(properties = {"peoplecore.runtime.role=api", "spring.jpa.hibernate.ddl-auto=validate"})
@@ -174,7 +175,7 @@ class LeaveEntitlementPostgresTest {
             var second=executor.submit(() -> new TransactionTemplate(transactions).executeWithoutResult(status -> service.reserve(employeeId,2026,UUID.randomUUID(),1,2)));
             release.countDown();
             first.get(10,TimeUnit.SECONDS);
-            assertThrows(java.util.concurrent.ExecutionException.class, () -> second.get(10,TimeUnit.SECONDS));
+            assertThrows(ExecutionException.class, () -> second.get(10,TimeUnit.SECONDS));
         } finally { release.countDown(); }
         assertEquals(2,service.query(employeePublicId,2026,hr).reserved());
     }

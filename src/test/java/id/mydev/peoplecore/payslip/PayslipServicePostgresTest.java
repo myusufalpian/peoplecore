@@ -1,6 +1,9 @@
 package id.mydev.peoplecore.payslip;
 
+import id.mydev.peoplecore.document.infrastructure.persistence.JdbcVerifiedDocumentRepository;
+
 import id.mydev.peoplecore.common.command.AdmissionGuard;
+import id.mydev.peoplecore.common.outbox.OutboxEventRepository;
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
@@ -11,6 +14,7 @@ import id.mydev.peoplecore.organization.domain.model.Employee;
 import id.mydev.peoplecore.payslip.application.PayslipModels.Draft;
 import id.mydev.peoplecore.payslip.application.PayslipModels.Item;
 import id.mydev.peoplecore.payslip.application.PayslipService;
+import id.mydev.peoplecore.payslip.infrastructure.persistence.JdbcPayslipRepository;
 import id.mydev.peoplecore.support.PostgresFixture;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
@@ -65,9 +69,9 @@ class PayslipServicePostgresTest {
             when(employee.getEmploymentStartDate()).thenReturn(LocalDate.of(2026, 11, 30));
             when(employee.getEmploymentEndDate()).thenReturn(LocalDate.of(2026, 12, 1));
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-            var service = new PayslipService(jdbc, employees, access, new VerifiedDocumentAccess(jdbc),
+            var service = new PayslipService(new JdbcPayslipRepository(jdbc), employees, access, new VerifiedDocumentAccess(new JdbcVerifiedDocumentRepository(jdbc)),
                 Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC), new ObjectMapper(),
-                mock(EntityManager.class), mock(AdmissionGuard.class));
+                mock(EntityManager.class), mock(AdmissionGuard.class), mock(OutboxEventRepository.class));
             UUID batch = UUID.randomUUID();
             Draft november = new Draft(List.of(new Item(owner, YearMonth.of(2026, 11), document)));
             Draft december = new Draft(List.of(new Item(owner, YearMonth.of(2026, 12), document)));
@@ -122,9 +126,9 @@ class PayslipServicePostgresTest {
             when(employees.requireInternalByPublicId(owner)).thenReturn(ownerEmployee);
             when(employees.currentOrgUnit(eq(ownerId), any(Instant.class))).thenReturn(Optional.of("UNIT-A"));
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-            var service = new PayslipService(jdbc, employees, access, new VerifiedDocumentAccess(jdbc),
+            var service = new PayslipService(new JdbcPayslipRepository(jdbc), employees, access, new VerifiedDocumentAccess(new JdbcVerifiedDocumentRepository(jdbc)),
                 Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC), new ObjectMapper(),
-                mock(EntityManager.class), mock(AdmissionGuard.class));
+                mock(EntityManager.class), mock(AdmissionGuard.class), mock(OutboxEventRepository.class));
             UUID batch = UUID.randomUUID();
             var month = YearMonth.of(2026, 11);
             Draft initialDraft = new Draft(List.of(new Item(owner, month, initialId)));
@@ -197,9 +201,9 @@ class PayslipServicePostgresTest {
                 return actor;
             });
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-            var service = new PayslipService(jdbc, employees, access, new VerifiedDocumentAccess(jdbc),
+            var service = new PayslipService(new JdbcPayslipRepository(jdbc), employees, access, new VerifiedDocumentAccess(new JdbcVerifiedDocumentRepository(jdbc)),
                 Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC), new ObjectMapper(),
-                mock(EntityManager.class), mock(AdmissionGuard.class));
+                mock(EntityManager.class), mock(AdmissionGuard.class), mock(OutboxEventRepository.class));
             UUID firstBatch = UUID.randomUUID();
             Draft first = new Draft(List.of(new Item(owner, YearMonth.of(2026, 11), firstId)));
             transactions.executeWithoutResult(status -> service.create(firstBatch, first, caller));

@@ -9,8 +9,10 @@ import id.mydev.peoplecore.attendance.application.command.AttendanceResults.Cloc
 import id.mydev.peoplecore.attendance.application.command.AttendanceResults.CorrectionResult;
 import id.mydev.peoplecore.attendance.application.service.AttendanceCorrectionService;
 import id.mydev.peoplecore.common.api.ApiData;
+import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import jakarta.validation.Valid;
 import org.springframework.security.core.Authentication;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,6 +25,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.time.LocalDate;
+import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/api/v1/attendance")
@@ -38,7 +42,10 @@ public class AttendanceRecordingController {
     private final Clock clock;
     public AttendanceRecordingController(AttendanceCommands commands,AttendanceCorrectionService corrections,
         AttendanceRecordingDtoMapper mapper,Clock clock) {
-        this.commands=commands;this.corrections=corrections;this.mapper=mapper;this.clock=clock;
+        this.commands = commands;
+        this.corrections = corrections;
+        this.mapper = mapper;
+        this.clock = clock;
     }
     @PostMapping("/clock-actions")
     public ApiData<ClockResult> clock(@Valid @RequestBody ClockRequest request,
@@ -57,27 +64,27 @@ public class AttendanceRecordingController {
     }
     @GetMapping("/corrections")
     public ApiData<AttendanceCorrectionService.CorrectionPage> list(
-        @org.springframework.web.bind.annotation.RequestParam UUID employeeId,
-        @org.springframework.web.bind.annotation.RequestParam java.time.LocalDate from,
-        @org.springframework.web.bind.annotation.RequestParam java.time.LocalDate to,
-        @org.springframework.web.bind.annotation.RequestParam(required=false) String status,
-        @org.springframework.web.bind.annotation.RequestParam(defaultValue="0") int page,
-        @org.springframework.web.bind.annotation.RequestParam(defaultValue="20") int size,Authentication caller) {
-        return ApiData.of(corrections.list(employeeId,from,to,status,page,size,caller));
+        @RequestParam UUID employeeId,
+        @RequestParam LocalDate from,
+        @RequestParam LocalDate to,
+        @RequestParam(required = false) String status,
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue =" 20") int size,Authentication caller) {
+        return ApiData.of(corrections.list(employeeId, from, to, status, page, size, caller));
     }
     @GetMapping("/corrections/{id}/history")
     public ApiData<AttendanceCorrectionService.HistoryPage> history(@PathVariable UUID id,
-        @org.springframework.web.bind.annotation.RequestParam(defaultValue="REVISIONS") String kind,
-        @org.springframework.web.bind.annotation.RequestParam(required=false) UUID after,
-        @org.springframework.web.bind.annotation.RequestParam(defaultValue="20") int size,Authentication caller) {
-        return ApiData.of(corrections.history(id,kind,after,size,caller));
+        @RequestParam(defaultValue = "REVISIONS") String kind,
+        @RequestParam(required = false) UUID after,
+        @RequestParam(defaultValue = "20") int size, Authentication caller) {
+        return ApiData.of(corrections.history(id, kind, after, size, caller));
     }
     @PostMapping("/corrections/{id}/{action}")
     public ApiData<CorrectionResult> action(@PathVariable UUID id,@PathVariable String action,
-        @Valid @RequestBody CorrectionActionRequest request,@RequestHeader("Idempotency-Key") String key,
+        @Valid @RequestBody CorrectionActionRequest request, @RequestHeader("Idempotency-Key") String key,
         Authentication caller) {
-        String operation=ACTIONS.get(action);
-        if (operation==null) throw new id.mydev.peoplecore.common.api.ResourceNotFoundException();
-        return ApiData.of(commands.act(caller,key,operation,mapper.action(id,request)));
+        String operation = ACTIONS.get(action);
+        if (StringUtils.hasLength(operation)) throw new ResourceNotFoundException();
+        return ApiData.of(commands.act(caller, key, operation, mapper.action(id,request)));
     }
 }

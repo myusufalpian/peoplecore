@@ -6,8 +6,9 @@ import java.util.List;
 import java.util.Optional;
 
 import id.mydev.peoplecore.identity.domain.model.AccountBinding;
+import java.util.UUID;
 public interface AccountBindingRepository extends JpaRepository<AccountBinding, Long> {
-    Optional<AccountBinding> findByEmployeePublicIdAndRevokedAtIsNull(java.util.UUID employeePublicId);
+    Optional<AccountBinding> findByEmployeePublicIdAndRevokedAtIsNull(UUID employeePublicId);
 
     Optional<AccountBinding> findByAccountIdAndRevokedAtIsNull(Long accountId);
 

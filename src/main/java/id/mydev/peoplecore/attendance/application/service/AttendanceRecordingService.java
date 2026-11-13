@@ -6,6 +6,8 @@ import id.mydev.peoplecore.attendance.application.command.AttendanceResults.Effe
 import id.mydev.peoplecore.attendance.application.service.AttendanceTimePolicy.Action;
 import id.mydev.peoplecore.attendance.domain.exception.WorkContextException;
 import id.mydev.peoplecore.attendance.domain.model.AttendanceOccurrence;
+import id.mydev.peoplecore.attendance.domain.repository.AttendanceRecordingRepository;
+import id.mydev.peoplecore.attendance.domain.repository.AttendanceRecordingRepository.EffectiveRecord;
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
@@ -13,12 +15,10 @@ import id.mydev.peoplecore.identity.domain.model.UserAccount;
 import id.mydev.peoplecore.organization.application.service.EmployeeService;
 import id.mydev.peoplecore.organization.domain.model.Employee;
 import jakarta.persistence.EntityManager;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -41,19 +41,19 @@ public class AttendanceRecordingService {
     private final EmployeeService employees;
     private final AdmissionGuard admission;
     private final EntityManager entities;
-    private final JdbcTemplate jdbc;
+    private final AttendanceRecordingRepository recordings;
     private final Clock clock;
 
     public AttendanceRecordingService(AttendanceOccurrenceResolver resolver, AttendanceAccountGuard guard,
         AccountAccessService access, EmployeeService employees, AdmissionGuard admission,
-        EntityManager entities, JdbcTemplate jdbc, Clock clock) {
+        EntityManager entities, AttendanceRecordingRepository recordings, Clock clock) {
         this.resolver = resolver;
         this.guard = guard;
         this.access = access;
         this.employees = employees;
         this.admission = admission;
         this.entities = entities;
-        this.jdbc = jdbc;
+        this.recordings = recordings;
         this.clock = clock;
     }
 
@@ -69,22 +69,17 @@ public class AttendanceRecordingService {
         guard.ensureLocked(employee.getId());
         Instant acceptedAt = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
         employee = requireSelf(caller, acceptedAt);
-        List<ClockResult> recent = jdbc.query("SELECT e.public_id, o.public_id AS occurrence_public_id, "
-            + "e.action, e.received_at, e.accepted_at FROM clock_event e "
-            + "JOIN attendance_occurrence o ON o.id=e.occurrence_id "
-            + "WHERE e.employee_id=? AND e.action=? AND e.accepted_at>=? AND e.accepted_at<=? "
-            + "ORDER BY e.accepted_at DESC", (rs, row) -> new ClockResult(
-                rs.getObject("public_id", UUID.class), employeePublic(caller, acceptedAt),
-                rs.getObject("occurrence_public_id", UUID.class), rs.getString("action"),
-                rs.getTimestamp("received_at").toInstant(), rs.getTimestamp("accepted_at").toInstant(), true),
-            employee.getId(), payload.action().name(), Timestamp.from(acceptedAt.minusSeconds(60)),
-            Timestamp.from(acceptedAt));
+        UUID employeePublicId = employeePublic(caller, acceptedAt);
+        List<ClockResult> recent = recordings.findRecent(employee.getId(), payload.action().name(),
+                acceptedAt.minusSeconds(60), acceptedAt).stream()
+            .map(event -> new ClockResult(event.publicId(), employeePublicId, event.occurrencePublicId(),
+                event.action(), event.receivedAt(), event.acceptedAt(), true))
+            .toList();
         if (!recent.isEmpty()) {
-            if (payload.action()==Action.IN) {
-                Long outs=jdbc.queryForObject("SELECT count(e.id) FROM clock_event e JOIN attendance_occurrence o "
-                    + "ON o.id=e.occurrence_id WHERE o.public_id=? AND e.action='OUT'",Long.class,
-                    recent.getFirst().occurrencePublicId());
-                if (outs>0) throw conflict("ACTION_ALREADY_RECORDED","The occurrence is already complete");
+            if (payload.action() == Action.IN) {
+                if (recordings.countOuts(recent.getFirst().occurrencePublicId()) > 0) {
+                    throw conflict("ACTION_ALREADY_RECORDED", "The occurrence is already complete");
+                }
             }
             return recent.getFirst();
         }
@@ -106,9 +101,8 @@ public class AttendanceRecordingService {
         }
         UUID eventId = UUID.randomUUID();
         requireSelf(caller, Instant.now(clock));
-        jdbc.update("INSERT INTO clock_event(public_id,occurrence_id,employee_id,action,received_at,accepted_at) "
-            + "VALUES(?,?,?,?,?,?)", eventId, occurrence.getId(), employee.getId(), payload.action().name(),
-            Timestamp.from(receivedAt), Timestamp.from(acceptedAt));
+        recordings.insertClockEvent(eventId, occurrence.getId(), employee.getId(), payload.action().name(),
+            receivedAt, acceptedAt);
         appendEffective(occurrence.getId(), effective.map(EffectiveResult::publicId).orElse(null),
             payload.action() == Action.IN ? acceptedAt : effective.orElseThrow().inAt(),
             payload.action() == Action.OUT ? acceptedAt : null, eventId, acceptedAt);
@@ -178,17 +172,16 @@ public class AttendanceRecordingService {
     }
 
     Optional<EffectiveResult> currentEvidence(Long occurrenceId) {
-        return jdbc.query("SELECT public_id,in_at,out_at FROM attendance_effective_revision "
-            + "WHERE occurrence_id=? ORDER BY id DESC LIMIT 1", (rs, row) -> new EffectiveResult(
-                rs.getObject("public_id", UUID.class), rs.getTimestamp("in_at").toInstant(),
-                rs.getTimestamp("out_at") == null ? null : rs.getTimestamp("out_at").toInstant()),
-            occurrenceId).stream().findFirst();
+        return recordings.findCurrentEvidence(occurrenceId)
+            .map(AttendanceRecordingService::toEffective);
     }
 
     void appendEffective(Long occurrenceId, UUID predecessor, Instant in, Instant out, UUID sourceId, Instant now) {
-        jdbc.update("INSERT INTO attendance_effective_revision(public_id,occurrence_id,predecessor_id,"
-            + "in_at,out_at,source_id,created_at) VALUES(?,?,?,?,?,?,?)", UUID.randomUUID(), occurrenceId,
-            predecessor, Timestamp.from(in), out == null ? null : Timestamp.from(out), sourceId, Timestamp.from(now));
+        recordings.insertEffective(UUID.randomUUID(), occurrenceId, predecessor, in, out, sourceId, now);
+    }
+
+    private static EffectiveResult toEffective(EffectiveRecord record) {
+        return new EffectiveResult(record.publicId(), record.inAt(), record.outAt());
     }
 
     static WorkContextException conflict(String reason, String message) {

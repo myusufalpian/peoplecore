@@ -52,6 +52,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @SpringBootTest(properties = {
     "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -82,7 +84,7 @@ class ProfileDecisionServiceTest {
     @Autowired ContactProfileRepository contactProfileRepository;
     @Autowired ProfileRevisionRepository revisionRepository;
     @Autowired ProfileProposalRepository proposalRepository;
-    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired JdbcTemplate jdbc;
 
     private Authentication hrCaller;
     private Authentication reviewerCaller;
@@ -453,7 +455,7 @@ class ProfileDecisionServiceTest {
         ProposalResult submitted = pendingPhoneProposal("+62 812 345 678");
         ContactProfile drifted = contactProfileRepository.findByEmployeeId(
             employeeRepository.findByPublicId(memberEmployeeId).orElseThrow().getId()).orElseThrow();
-        org.springframework.test.util.ReflectionTestUtils.setField(
+        ReflectionTestUtils.setField(
             drifted, "personalPhone", "+62 812 000 000");
         contactProfileRepository.saveAndFlush(drifted);
         assertThrows(ProfileConflictException.class, () -> proposals.decideProposal(

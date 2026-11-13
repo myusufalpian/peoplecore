@@ -15,7 +15,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
+import id.mydev.peoplecore.reimbursement.domain.repository.ReimbursementWorkflowRepository;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.access.AccessDeniedException;
 import tools.jackson.databind.ObjectMapper;
@@ -27,13 +27,14 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
+import java.util.Optional;
 
 class ReimbursementWorkflowValidationTest {
     @Test
     void commandAuthorizationValidatesIdentityAndCurrentOwnerGrant() throws Exception {
         EmployeeService employees = mock(EmployeeService.class);
         AccountAccessService access = mock(AccountAccessService.class);
-        var service = new ReimbursementWorkflowService(mock(JdbcTemplate.class), employees, access,
+        var service = new ReimbursementWorkflowService(mock(ReimbursementWorkflowRepository.class), employees, access,
             mock(ReimbursementSubmissionService.class), mock(ReimbursementCategoryService.class), mock(EntityManager.class),
             mock(AdmissionGuard.class), Clock.systemUTC());
         Authentication caller = mock(Authentication.class);
@@ -44,7 +45,7 @@ class ReimbursementWorkflowValidationTest {
         UserAccount account = mock(UserAccount.class);
         when(account.getId()).thenReturn(1L);
         when(access.requireActive(eq(caller), any())).thenReturn(account);
-        when(access.ownEmployeePublicId(account)).thenReturn(java.util.Optional.of(employeeId));
+        when(access.ownEmployeePublicId(account)).thenReturn(Optional.of(employeeId));
         when(access.activeRoles(eq(1L), any())).thenReturn(List.of("MANAGER"));
         ObjectMapper mapper = new ObjectMapper();
         var payload = mapper.readTree("{\"employeePublicId\":\"" + employeeId + "\"}");
@@ -62,7 +63,7 @@ class ReimbursementWorkflowValidationTest {
 
     @Test
     void rejectsMalformedDraftsAndMissingEditVersionBeforeDatabaseAccess() {
-        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        ReimbursementWorkflowRepository jdbc = mock(ReimbursementWorkflowRepository.class);
         var service = new ReimbursementWorkflowService(jdbc, mock(EmployeeService.class), mock(AccountAccessService.class),
             mock(ReimbursementSubmissionService.class), mock(ReimbursementCategoryService.class), mock(EntityManager.class),
             mock(AdmissionGuard.class), Clock.systemUTC());
@@ -101,7 +102,7 @@ class ReimbursementWorkflowValidationTest {
 
     @Test
     void listAndHistoryRejectUnboundedPageSizesBeforeDatabaseAccess() {
-        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        ReimbursementWorkflowRepository jdbc = mock(ReimbursementWorkflowRepository.class);
         var service = new ReimbursementWorkflowService(jdbc, mock(EmployeeService.class), mock(AccountAccessService.class),
             mock(ReimbursementSubmissionService.class), mock(ReimbursementCategoryService.class), mock(EntityManager.class),
             mock(AdmissionGuard.class), Clock.systemUTC());
@@ -116,7 +117,7 @@ class ReimbursementWorkflowValidationTest {
 
     @Test
     void actionRequiresExplicitNonnegativeExpectedVersion() {
-        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        ReimbursementWorkflowRepository jdbc = mock(ReimbursementWorkflowRepository.class);
         var service = new ReimbursementWorkflowService(jdbc, mock(EmployeeService.class), mock(AccountAccessService.class),
             mock(ReimbursementSubmissionService.class), mock(ReimbursementCategoryService.class), mock(EntityManager.class),
             mock(AdmissionGuard.class), Clock.systemUTC());

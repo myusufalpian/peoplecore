@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.List;
 
 public final class EmployeeDto {
     private EmployeeDto() { }
@@ -64,6 +65,6 @@ public final class EmployeeDto {
 
     public record EmployeeDetailResponse(
         EmployeeResponse employee,
-        java.util.List<AssignmentResponse> assignments
+        List<AssignmentResponse> assignments
     ) { }
 }

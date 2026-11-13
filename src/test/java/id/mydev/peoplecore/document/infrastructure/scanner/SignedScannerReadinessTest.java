@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.function.Function;
 
 class SignedScannerReadinessTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
@@ -146,7 +147,7 @@ class SignedScannerReadinessTest {
             NOW.plusSeconds(10), NOW.minusSeconds(3600), true, true)).current());
     }
 
-    private static SignedScannerReadiness signed(KeyPair keys, java.util.function.Function<UUID, SignedScannerReadiness.Evidence> evidence) {
+    private static SignedScannerReadiness signed(KeyPair keys, Function<UUID, SignedScannerReadiness.Evidence> evidence) {
         return new SignedScannerReadiness(challenge -> sign(keys, evidence.apply(challenge)), keys.getPublic(),
             "document-worker", POD, Duration.ofSeconds(30), Duration.ofHours(1), Clock.fixed(NOW, ZoneOffset.UTC));
     }

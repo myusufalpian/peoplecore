@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import jakarta.servlet.ServletInputStream;
 
 class RequestBodyLimitFilterTest {
     @ParameterizedTest
@@ -58,7 +59,7 @@ class RequestBodyLimitFilterTest {
         request.setCharacterEncoding("UTF-8");
         request.setContent(new byte[PayloadLimits.MAX_BODY_BYTES]);
         filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {
-            var input = (jakarta.servlet.ServletInputStream) req.getInputStream();
+            var input = (ServletInputStream) req.getInputStream();
             assertFalse(input.isFinished());
             assertEquals(PayloadLimits.MAX_BODY_BYTES, input.readAllBytes().length);
             assertTrue(input.isFinished());

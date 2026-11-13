@@ -4,7 +4,8 @@ import id.mydev.peoplecore.common.command.CommandConflictException;
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.document.application.service.DocumentUploadService.PendingUpload;
 import id.mydev.peoplecore.document.application.service.DocumentUploadService.Request;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
+import id.mydev.peoplecore.document.infrastructure.persistence.JdbcDocumentUploadRepository;
 import id.mydev.peoplecore.organization.domain.model.Employee;
 import id.mydev.peoplecore.support.PostgresFixture;
 import jakarta.persistence.EntityManager;
@@ -18,6 +19,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -40,7 +43,8 @@ class DocumentUploadPostgresTest {
                 .thenReturn(employee).thenThrow(new ResourceNotFoundException());
             JdbcTemplate jdbc = fixture.runtime();
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-            var service = new DocumentUploadService(jdbc, mock(EntityManager.class), access, Clock.systemUTC());
+            var service = new DocumentUploadService(new JdbcDocumentUploadRepository(jdbc), mock(EntityManager.class),
+                access, Clock.systemUTC());
             UUID document = UUID.randomUUID();
 
             assertThrows(ResourceNotFoundException.class, () -> transactions.execute(status -> service.create(document,
@@ -65,10 +69,19 @@ class DocumentUploadPostgresTest {
             when(access.requireUpload(caller, employeePublicId, Purpose.CLAIM_EVIDENCE)).thenReturn(employee);
             JdbcTemplate jdbc = fixture.runtime();
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-            var service = new DocumentUploadService(jdbc, mock(EntityManager.class), access, Clock.systemUTC());
+            var service = new DocumentUploadService(new JdbcDocumentUploadRepository(jdbc), mock(EntityManager.class),
+                access, Clock.systemUTC());
             UUID document = UUID.randomUUID();
             transactions.executeWithoutResult(status -> service.create(document,
                 new Request(employeePublicId, Purpose.CLAIM_EVIDENCE, "receipt.pdf", "application/pdf", 12), caller));
+            var metadata = transactions.execute(status -> service.status(document, caller));
+            assertEquals(document, metadata.publicId());
+            assertEquals(Purpose.CLAIM_EVIDENCE, metadata.purpose());
+            assertEquals("PENDING_UPLOAD", metadata.status());
+            assertNotNull(metadata.createdAt());
+            assertNull(metadata.mediaType());
+            assertNull(metadata.byteSize());
+            assertNull(metadata.verifiedAt());
             var pending = transactions.execute(status -> service.reserve(document, UUID.randomUUID(), caller));
             var changed = new PendingUpload(document, employeePublicId, Purpose.CLAIM_EVIDENCE,
                 pending.uploadPublicId(), "image/png", 12);
@@ -99,7 +112,8 @@ class DocumentUploadPostgresTest {
             when(access.requireUpload(caller, employeePublicId, Purpose.CLAIM_EVIDENCE)).thenReturn(employee);
             JdbcTemplate jdbc = fixture.runtime();
             var transactions = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
-            var service = new DocumentUploadService(jdbc, mock(EntityManager.class), access, Clock.systemUTC());
+            var service = new DocumentUploadService(new JdbcDocumentUploadRepository(jdbc), mock(EntityManager.class),
+                access, Clock.systemUTC());
             UUID document = UUID.randomUUID();
             UUID oldUpload = UUID.randomUUID();
             UUID newUpload = UUID.randomUUID();

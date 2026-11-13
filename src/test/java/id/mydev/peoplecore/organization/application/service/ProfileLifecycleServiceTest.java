@@ -56,6 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import id.mydev.peoplecore.organization.domain.exception.ProfileStaleVersionException;
 
 @SpringBootTest(properties = {
     "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -332,7 +333,7 @@ class ProfileLifecycleServiceTest {
         assertEquals(3, edited.revisionNumber());
         assertNull(edited.assignmentPublicId());
         assertNull(proposals.getContactProfile(memberEmployeeId, memberCaller).personalPhone());
-        assertThrows(id.mydev.peoplecore.organization.domain.exception.ProfileStaleVersionException.class,
+        assertThrows(ProfileStaleVersionException.class,
             () -> proposals.editProposal(returned.proposalPublicId(), returned.proposalVersion(),
                 List.of(phone("+62 814 111 222")), memberCaller));
         ProposalHistoryResult beforeResubmit = proposals.getHistory(returned.proposalPublicId(), memberCaller, 0, 20);

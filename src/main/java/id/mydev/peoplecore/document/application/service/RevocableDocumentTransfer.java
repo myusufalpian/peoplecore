@@ -21,6 +21,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.io.Closeable;
 
 public final class RevocableDocumentTransfer implements AutoCloseable {
     private static final Duration MAX_RECHECK_DELAY = Duration.ofMinutes(5);
@@ -194,7 +195,7 @@ public final class RevocableDocumentTransfer implements AutoCloseable {
         }
     }
 
-    private void closeAsync(java.io.Closeable resource) {
+    private void closeAsync(Closeable resource) {
         try {
             closers.execute(() -> {
                 try {

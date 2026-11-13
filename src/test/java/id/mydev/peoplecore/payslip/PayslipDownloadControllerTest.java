@@ -2,7 +2,7 @@ package id.mydev.peoplecore.payslip;
 
 import id.mydev.peoplecore.document.application.service.DocumentVersionContentService;
 import id.mydev.peoplecore.document.application.service.RevocableDocumentTransfer;
-import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess.Purpose;
+import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.payslip.api.PayslipDownloadController;
 import id.mydev.peoplecore.payslip.application.PayslipModels.PublishedVersion;
 import id.mydev.peoplecore.payslip.application.PayslipService;
