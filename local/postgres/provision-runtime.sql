@@ -44,5 +44,25 @@ GRANT SELECT, INSERT, UPDATE ON leave_rule_current, leave_request, leave_occupan
     leave_review_assignment, leave_cancellation, leave_cancellation_assignment TO peoplecore_runtime;
 
 GRANT SELECT, INSERT ON audit_events TO peoplecore_runtime;
+GRANT SELECT, INSERT ON inbox_events, event_quarantine TO peoplecore_runtime;
+GRANT SELECT, INSERT ON event_replays, event_replay_items TO peoplecore_runtime;
+GRANT UPDATE (status) ON event_replays TO peoplecore_runtime;
+GRANT UPDATE (status, lease_generation, lease_until, completed_at) ON event_replay_items TO peoplecore_runtime;
+GRANT SELECT, UPDATE ON event_transport_budget TO peoplecore_runtime;
+GRANT SELECT, INSERT, UPDATE ON notification_destination, notification_rate_bucket TO peoplecore_runtime;
+GRANT SELECT, INSERT ON invitation_delivery_source TO peoplecore_runtime;
+GRANT UPDATE (ciphertext) ON invitation_delivery_source TO peoplecore_runtime;
+GRANT SELECT, INSERT ON notification_intent, notification_attempt, notification_evidence,
+    notification_operation, notification_attention, notification_destination_operation TO peoplecore_runtime;
+GRANT SELECT, INSERT ON notification_delivery TO peoplecore_runtime;
+GRANT SELECT, INSERT ON notification_attention_alert TO peoplecore_runtime;
+GRANT UPDATE (lease_generation, lease_until, next_attempt_at, attempt_count, delivered_at)
+    ON notification_attention_alert TO peoplecore_runtime;
+GRANT UPDATE (state, version, lease_generation, lease_ends_at, next_attempt_at, attempt_count,
+    manual_attempt, provider_message_id, error_code, updated_at) ON notification_delivery TO peoplecore_runtime;
+GRANT SELECT, INSERT ON report_export_job, report_export_candidate TO peoplecore_runtime;
+GRANT UPDATE (status, data_as_of, authorization_generation, next_boundary, lease_generation, lease_until,
+    candidate_id, byte_size, sha256, reason_code) ON report_export_job TO peoplecore_runtime;
+GRANT UPDATE (uploaded_at, byte_size, sha256, deleted_at, next_reconcile_at) ON report_export_candidate TO peoplecore_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO peoplecore_runtime;
 COMMIT;

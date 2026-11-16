@@ -1,127 +1,48 @@
 # Peoplecore Backend
 
-Peoplecore is a Spring Boot backend that provides employee records, effective-dated organization assignments, identity enrollment, reviewed contact-profile changes, attendance, annual leave, private documents, reimbursement, and payslip publication through a transactional HTTP API. This repository contains the API and worker runtime. Client applications are separate consumers of the HTTP API.
+Peoplecore is a Java backend for employee records, organization assignments, identity enrollment, contact-profile approvals, attendance, annual leave, private documents, reimbursements and payslip publication. It also implements durable event transport, email delivery, scoped operational reports and CSV exports. The same application can run as an HTTP API or a non-web worker.
 
-## Technology stack
+## Stack and source layout
 
-- Java 25 with the Gradle wrapper.
-- Spring Boot 4.1.1 and Spring MVC.
-- Spring Data JPA with PostgreSQL 18.
-- Flyway for versioned database migrations.
-- Spring Security with JWT resource-server validation and database-backed account, role, and organization-scope checks.
-- Jackson 3 for JSON serialization and Bean Validation for request validation.
-- AWS SDK v2 S3 client for object storage integration.
-- JUnit 5, Spring Boot test slices, isolated-schema PostgreSQL fixtures, and JaCoCo for verification.
-- Docker Compose for local PostgreSQL, SQS-compatible ElasticMQ, and Keycloak services.
+[build.gradle](build.gradle) defines Java 25, Spring Boot 4.1.1, Spring MVC, Spring Data JPA, Spring Security, Flyway, Jackson 3, AWS SDK v2 and JaCoCo. PostgreSQL holds application state. AWS clients integrate S3-compatible private storage, SQS, SES v2 and KMS. A separate document-parser JAR uses PDFBox and is packaged into the executable application.
 
-The application is started from `id.mydev.peoplecore.PeoplecoreApplication`. Database migrations are intentionally run explicitly through the `migrate` command; normal application startup does not mutate the database schema.
+Production code is under [src/main/java/id/mydev/peoplecore](src/main/java/id/mydev/peoplecore):
 
-## Repository structure
-
-```text
-src/main/java/id/mydev/peoplecore/
-├── common/api       HTTP response models, validation, pagination, exception mapping
-├── common/audit     append-only audit recording and scoped audit queries
-├── common/command   transactional command execution, receipts, conflicts, and idempotency
-├── common/outbox    pending events stored within the command transaction
-├── common/security  authentication, authorization, correlation IDs, and payload limits
-├── identity/        accounts, effective roles, enrollment, bindings, access lifecycle
-├── approval/        shared admission, profile rule snapshots, activation, route preview
-├── organization/    employees, assignments, contact profiles, proposals, review history
-├── attendance/      schedules, calendars, canonical occurrences, clock events, corrections
-├── leave/           annual entitlements, ledger, request review, cancellation
-├── document/        private uploads, verification, streaming, legal hold, deletion and retry cleanup
-├── reimbursement/   effective categories, claims, review, payment records
-├── payslip/         reviewed batches, publication history, employee access
-└── infrastructure/  migrations, runtime database checks, and runtime configuration
-```
-
-The package layout follows the technical responsibility of each component. Business modules organize HTTP contracts under `api`, command execution and services under `application`, and models, repositories, and typed exceptions under `domain`. Dedicated mappers, policies, validators, and trail writers are present where needed. These modules reuse the common command, API, audit, outbox, and security infrastructure.
-
-## Code conventions
-
-Use Java records for immutable API and value data where appropriate, constructor or method injection for dependencies, and explicit validation at input boundaries. Keep SQL, JDBC access, and row mapping in repository adapters under infrastructure/persistence. Application services coordinate business rules and transaction boundaries through repository contracts; repository contracts and adapters must not depend on application models. Keep mapping logic out of controllers and use imports instead of fully qualified Java types and annotations. Use `Instant` and `LocalDate` at application boundaries; convert JDBC types inside persistence adapters. Use `BigDecimal` for exact decimal values where applicable; reimbursement amounts use positive whole-rupiah `long` values.
-
-The `leave` and `attendance` recording controllers expose their application command-result records directly as read models; this is the recorded exception documented in [architecture](architecture.md#system-shape). Request bodies still use `api` DTOs/mappers where present, and other modules keep the `api` mapping convention.
-
-HTTP errors are mapped centrally through `GlobalExceptionHandler`; controllers should raise the relevant typed exception instead of constructing ad-hoc error JSON. Security decisions belong in the access-policy and identity services and the Spring Security configuration. Audit records are written through the audit writer and are append-only at the database layer.
-
-Tests mirror the production package structure. Unit tests cover deterministic domain and infrastructure behavior, HTTP tests verify status codes and response contracts, and PostgreSQL-tagged tests verify migrations and database constraints against a real PostgreSQL instance.
-
-## Optional document and finance features
-
-Document, reimbursement, and payslip HTTP endpoints are disabled unless their feature flags are enabled:
-
-| Property | Behavior |
+| Package | Responsibility |
 |---|---|
-| `peoplecore.documents.enabled` | Upload metadata, upload authorization, finalization, document reads, content, and legal holds |
-| `peoplecore.documents.deletion.enabled` | Deletion/restore endpoints and scheduled cleanup; also requires documents enabled and storage for the scheduler |
-| `peoplecore.reimbursement.enabled` | Categories, claims, review, payment records, and claim-linked evidence |
-| `peoplecore.payslip.enabled` | Batch review/publication and employee publication lists |
-| `peoplecore.payslip.download.enabled` | Published payslip content; also requires payslips enabled |
-| `peoplecore.documents.transfer.enabled` | Revocable content transfer; requires explicit `max-concurrent`, `poll-interval`, and `check-timeout` settings |
+| `common` | HTTP errors, request limits, command receipts, idempotency, audit, outbox and shared security |
+| `identity` | Accounts, effective roles, employee bindings, enrollment, verified delivery destinations and authorization fences |
+| `organization` | Employees, effective-dated assignments, contact profiles and proposed profile changes |
+| `approval` | Shared admission coordination and profile approval-rule snapshots |
+| `attendance` | Schedule/calendar revisions, work context, clock events and correction workflows |
+| `leave` | Annual entitlements, ledger, request review and cancellation |
+| `document` | Private uploads, verification, authenticated streaming, legal holds and deletion |
+| `reimbursement` | Categories, claims, review and payment records |
+| `payslip` | Batch review, publication history and employee access |
+| `notification` | Frozen recipients, delivery attempts, provider evidence and operator repair |
+| `reporting` | Scoped reports through domain-owned query adapters |
+| `reportexport` | Durable CSV generation, immutable artifacts and authorized downloads |
+| `infrastructure` | Runtime configuration, database guards, migrations and queue adapters |
 
-Storage-backed operations require configured private object storage. Verification also requires a trusted scanner and format verifier. Content download uses authenticated streaming with repeated authorization checks; validate cancellation and time limits on the actual server and gateway before enabling it in production. Validate scanner identity, loaded definitions, and freshness on the deployed scanner. A feature flag alone does not establish those properties.
+Modules separate HTTP contracts, application services, domain models/repository contracts and infrastructure adapters. The entry point is [PeoplecoreApplication](src/main/java/id/mydev/peoplecore/PeoplecoreApplication.java). Versioned SQL is under [src/main/resources/db/migration](src/main/resources/db/migration).
 
-Deletion claims immediately block reads and can be restored before their deadline. Cleanup commits logical deletion and audit before storage I/O, then records `objects_purged_at` only after every candidate object is deleted. Storage failures remain retryable across restarts. Unfinished copies block object deletion until completion or explicit reconciliation; lease expiry alone does not prove the provider stopped writing. Keep cleanup disabled during recovery until restore and reconciliation are complete. See [document lifecycle](architecture.md#private-documents-reimbursement-and-payslips) for the storage and transaction boundaries.
+## Local setup
 
-## Runtime services
+Install Java 25 and Docker with Compose. The Gradle wrapper is included. [compose.yaml](compose.yaml) provides these loopback services:
 
-For local development, Compose provides:
+| Service | Address |
+|---|---|
+| PostgreSQL | `127.0.0.1:54329` |
+| SQS-compatible ElasticMQ | `127.0.0.1:4566` |
+| Keycloak | `127.0.0.1:8081` |
 
-- PostgreSQL on `127.0.0.1:54329`.
-- An SQS-compatible ElasticMQ endpoint on `127.0.0.1:4566`.
-- Keycloak on `127.0.0.1:8081`.
+Set `PEOPLECORE_DB_PASSWORD`, `PEOPLECORE_RUNTIME_DB_PASSWORD`, `KEYCLOAK_ADMIN_USERNAME` and `KEYCLOAK_ADMIN_PASSWORD` in the shell environment before invoking Compose. Compose requires all four variables when resolving the configuration. A Compose environment file does not export values into the shell used by Gradle.
 
-The application uses the least-privileged `peoplecore_runtime` PostgreSQL role at runtime. The owner role is reserved for migrations and provisioning. Set `PEOPLECORE_DB_PASSWORD`, `PEOPLECORE_RUNTIME_DB_PASSWORD`, `KEYCLOAK_ADMIN_USERNAME`, and `KEYCLOAK_ADMIN_PASSWORD` in the local environment before starting Compose. Runtime startup checks reject privileged database roles and unsafe audit permissions.
-
-## API contract
-
-Successful responses use the typed payload represented by the endpoint. Collection responses use a `data` value together with `metadata`; `PageMetadata` contains `page`, `size`, `totalElements`, and `totalPages`. Success responses do not add a generic success flag or message.
-
-Failure responses use this shape:
-
-```json
-{
-  "key": "VALIDATION_ERROR",
-  "message": "Request validation failed.",
-  "timestamp": "2026-10-08T10:15:30Z",
-  "details": [
-    { "field": "name", "message": "must not be blank" }
-  ]
-}
-```
-
-`details` is omitted when there are no field-level validation errors. Authentication, authorization, validation, not-found, pagination, payload-size, and unexpected failures are mapped to the corresponding HTTP status by the central exception and security handlers. Every request receives a correlation ID, and oversized or excessively nested JSON is rejected at the request boundary.
-
-Implemented endpoints include `/api/v1/employees`, `/api/v1/me/access`, and `/api/v1/enrollments`. Employee operations cover creation, number changes, employment start/end dates, assignment creation, and assignment revision. Employee detail includes the manager public UUID and assignment ancestry. Assignment intervals are start-inclusive and end-exclusive, normalized to microsecond precision, and checked for overlap. Revisions preserve the original row and any retained earlier interval. Employment dates do not set the account access cutoff.
-
-Enrollment supports invitation issuance/reissue, activation, offboarding, rebind, rehire, and explicit role restoration. Invitations are bound to a verified issuer/subject, store a secret hash, and enforce expiry, revocation, one-time consumption, and bounded activation attempts. The plaintext secret appears only in the initial issuance response; replay returns metadata without the secret. Rehire does not automatically restore access roles.
-
-Business endpoints require a verified JWT identity. Account status, access cutoff, active database role assignments, and current organization scope determine access; token role claims do not grant HRIS roles. Own-employee reads require a current binding and an effective role. Invitation issue/reissue and identity rebind require both applicable HR scope and an effective organization-wide `SYSTEM_ADMIN` grant. The shared HTTP chain retains Basic authentication, but Basic credentials do not satisfy these business identity checks.
-
-Attendance and annual-leave APIs use `/api/v1/attendance`, `/api/v1/leave`, `/api/v1/employees/{id}/work-context`, and `/api/v1/approval/{attendance,leave}-rule-sets`. They cover schedule/calendar revision catalogs and assignments, clock actions and correction history, annual entitlement/ledger, leave requests and whole cancellation. Both rule-set families expose an advisory route preview; the attendance preview returns the active configuration public UUID, the current reviewer account public UUID, and any blocked reason. Owner, current reviewer and scoped-HR access is rechecked on reads, commands and replay. Module ownership, lock order and canonical evidence are described in [architecture.md](architecture.md#attendance-and-annual-leave).
-
-Mutations require `Idempotency-Key`. Command receipts, before/after audit details where applicable, and outbox records commit atomically with domain changes. Replay rechecks current authorization, and changed payloads conflict. Outbox records are durable pending events; persisting one does not mean an external provider has delivered a notification.
-
-Contact-profile self-service uses `/api/v1/employees/me/profile-proposals` and `/api/v1/profile-proposals/{id}`. Employees propose phone, email, address, or complete emergency-contact changes; active values change only after an assigned eligible HR reviewer approves. Returned proposals can be edited before resubmission; editing preserves `RETURNED`, and resubmission captures fresh routing context. Explicit null values and field removal are rejected. Touched-group counters detect intervening changes, including A→B→A; unrelated corrections survive approval. One open proposal per employee is enforced in PostgreSQL.
-
-HR publishes designated-reviewer rule snapshots through `/api/v1/approval/profile-rule-sets`. Changing the single global activation pointer additionally requires organization-wide HR authority, including receipt replay. Scoped publication does not confer global activation authority. No match/tie or ineligible reviewer leaves a visible blocked request; repair uses explicit retry/reassignment. Owner/current scoped HR alone may read sensitive proposal history.
-
-Proposal detail includes `availableActions` derived from current authority and state; every command rechecks authorization. History exposes sealed revisions, decisions, route evaluations, and reviewer-assignment history. Submitted revisions pin the effective organization-assignment UUID and predecessor UUID alongside the evaluated unit and job level. `organizationContextStatus` distinguishes `RESOLVED`, `NOT_EVALUATED`, and legacy `UNKNOWN` context without inventing historical references.
-
-For `/api/v1/profile-proposals/{id}/history`, `page` selects revisions; `decisionPage`, `evaluationPage`, and `assignmentPage` independently select the other history collections. All pages are zero-based and share `size` (default 20, maximum 100). Metadata reports each collection total, allowing clients to retrieve history beyond the first page.
-
-Private document APIs use `/api/v1/documents`: create upload metadata, request a presigned upload URL, finalize verification, read status/content, manage legal holds, and claim/restore deletion. Reimbursement APIs use `/api/v1/reimbursement` for effective categories, claims, manager/Finance decisions, payment records, and authorized evidence reads. Payslip APIs use `/api/v1/payslips/batches` for reviewed publication and `/api/v1/payslips` for an employee's published documents. Publication records notification intent atomically; the API does not perform payroll calculation or funds transfer.
-
-Detailed behavior and HTTP examples are in [IMPLEMENTATION.md](IMPLEMENTATION.md); module and transaction boundaries are in [architecture.md](architecture.md).
-
-## Running and verifying
-
-Use Java 25. Supply `PEOPLECORE_DB_PASSWORD`, `PEOPLECORE_RUNTIME_DB_PASSWORD`, `KEYCLOAK_ADMIN_USERNAME`, and `KEYCLOAK_ADMIN_PASSWORD` in the shell environment. Start PostgreSQL before migrating:
+Start the database, wait until it accepts connections, migrate as the owner, then provision the runtime role:
 
 ```bash
 docker compose up -d postgres
+docker compose exec postgres pg_isready -U peoplecore -d peoplecore
 export PEOPLECORE_MIGRATION_DB_URL=jdbc:postgresql://localhost:54329/peoplecore
 export PEOPLECORE_MIGRATION_DB_USERNAME=peoplecore
 export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
@@ -129,11 +50,9 @@ export PEOPLECORE_MIGRATION_DB_PASSWORD="$PEOPLECORE_DB_PASSWORD"
 docker compose --profile provision run --rm postgres-runtime-provision
 ```
 
-The provisioning script grants foundation, identity, organization, contact-profile, attendance, leave, document, reimbursement, and payslip permissions, including append-only history and audit access. It revokes stale table and sequence privileges before re-granting, so rerun it with owner credentials after applying migrations; a runtime role provisioned only by an older script lacks the identity grants and cannot serve authenticated endpoints.
+The [migration runner](src/main/java/id/mydev/peoplecore/infrastructure/migration/MigrationRunner.java) requires those three migration variables. Normal application startup forces Flyway off. Rerun [runtime provisioning](local/postgres/provision-runtime.sql) after applying migrations so the runtime role receives current grants. The runtime role must not own schema objects, inherit privileged roles, create schema objects or mutate existing audit events; [RuntimeDatabaseGuard](src/main/java/id/mydev/peoplecore/infrastructure/migration/RuntimeDatabaseGuard.java) enforces these checks.
 
-Keep the existing audit-table permission limited to `SELECT, INSERT`. Provision initial accounts and role assignments through controlled owner-side administration; the API has no administrator bootstrap endpoint.
-
-Enable JWT validation with your identity provider configuration and define the accepted organization units:
+The `local` profile configures PostgreSQL with `peoplecore_runtime` and `PEOPLECORE_RUNTIME_DB_PASSWORD`. Configure JWT validation and accepted organization units explicitly:
 
 ```bash
 export PEOPLECORE_SECURITY_JWT_ISSUER_URI="https://identity.example.com/realms/peoplecore"
@@ -143,7 +62,73 @@ export PEOPLECORE_ORGANIZATION_ALLOWED_UNITS="ENG,FIN"
 ./gradlew bootRun --args="--spring.profiles.active=local"
 ```
 
-Replace the example issuer, audience, and JWKS URL with values matching your verified tokens and provisioned account identities. `peoplecore.runtime.role` defaults to `api`; setting it to `worker` starts without an HTTP server.
+Replace the identity-provider values with those matching the provisioned account identities and signed tokens. Starting local Keycloak uses `docker compose up -d keycloak`; it does not automatically configure the application's JWT settings or bootstrap application administrators.
+
+`peoplecore.runtime.role` defaults to `api`. Set it to `worker` for a process without an HTTP server:
+
+```bash
+./gradlew bootRun --args="--spring.profiles.active=local --peoplecore.runtime.role=worker"
+```
+
+Optional processors still require their own feature flags and dependencies.
+
+## API and authorization
+
+Business access uses a verified JWT issuer/subject together with active database accounts, effective role assignments, current employee bindings and organization scope. Token role claims do not assign application roles. The shared HTTP security chain also supports Basic authentication, while business identity checks require JWT identity. Initial application accounts and grants must be provisioned through controlled database administration; there is no administrator bootstrap endpoint.
+
+| API family | Main surfaces |
+|---|---|
+| Employees and identity | `/api/v1/employees`, `/api/v1/me/access`, `/api/v1/enrollments` |
+| Contact-profile changes | `/api/v1/employees/me/profile-proposals`, `/api/v1/profile-proposals/{id}` |
+| Approval configuration | `/api/v1/approval/profile-rule-sets`, `/api/v1/approval/attendance-rule-sets`, leave rule-set routes |
+| Attendance and work context | `/api/v1/attendance`, employee work-context and schedule/calendar assignment routes |
+| Annual leave | `/api/v1/leave/entitlements`, leave-request and cancellation routes |
+| Documents and finance | `/api/v1/documents`, `/api/v1/reimbursement`, `/api/v1/payslips` |
+| Reports | `/api/v1/reports/{type}`, `/api/v1/audit-events` |
+| Exports | `/api/v1/report-exports` |
+| Operator repair | `/api/v1/operations/event-replays`, `/api/v1/operations/notification-deliveries` |
+
+Domain mutations use `Idempotency-Key`. Command receipts, domain state, audit and outbox events commit in the same transaction. Repeating a command rechecks current authority; reusing a key with a different payload conflicts. Storing an outbox event does not imply external delivery.
+
+Successful responses use the endpoint's typed result; collection responses use `data` and `metadata`. Errors contain `key`, `message`, `timestamp` and optional field-validation `details`. Correlation IDs, body-size limits and strict JSON parsing are implemented at the request boundary. See the actual handlers under [common/api](src/main/java/id/mydev/peoplecore/common/api) and [common/security](src/main/java/id/mydev/peoplecore/common/security).
+
+## Optional features
+
+These feature switches are opt-in; the checked-in application configuration does not enable them:
+
+| Property | Enabled behavior and dependencies |
+|---|---|
+| `peoplecore.documents.enabled` | Document HTTP operations; storage and verification dependencies are configured separately |
+| `peoplecore.documents.deletion.enabled` | Deletion/restore operations and cleanup when documents are enabled; scheduled cleanup also needs storage |
+| `peoplecore.documents.transfer.enabled` | Revocable document transfers; requires explicit `max-concurrent`, `poll-interval` and `check-timeout` under the same prefix |
+| `peoplecore.reimbursement.enabled` | Reimbursement categories, claims, reviews and payment recording |
+| `peoplecore.payslip.enabled` | Payslip batches and publication lists |
+| `peoplecore.payslip.download.enabled` | Published payslip content when payslips are enabled |
+| `peoplecore.events.enabled` | Worker SQS transport; requires region and notification/export queue and DLQ URLs |
+| `peoplecore.events.replay.enabled` | Restricted operator replay API; the transport worker processes accepted replay work |
+| `peoplecore.notifications.enabled` | Notification intents, destination administration and support API; requires region, invitation key ID and HTTPS application URL |
+| `peoplecore.notifications.attention.enabled` | Independent alert worker; requires authenticated `attention.webhook-url` and `attention.token`, plus worker runtime |
+| `peoplecore.notifications.send.enabled` | SES sending when notifications are enabled; requires sender/configuration set, worker runtime and the independent alert worker |
+| `peoplecore.notifications.feedback.enabled` | Trusted SES feedback; the worker additionally needs events enabled, feedback queue/topic configuration and the independent alert worker |
+| `peoplecore.reports.enabled` | Scoped reports and audit search |
+| `peoplecore.exports.enabled` | CSV export API; generation/download require configured private export storage |
+| `peoplecore.exports.worker.enabled` | Export processing when exports are enabled and runtime role is worker |
+
+Storage-backed document operations use the configuration in [DocumentStorageConfig](src/main/java/id/mydev/peoplecore/document/infrastructure/storage/DocumentStorageConfig.java). Verification uses separately configured scanner, parser and timing settings. Authenticated content transfer repeatedly checks authorization. Deletion blocks reads immediately; physical cleanup remains retryable and does not treat an expired copy lease as proof that storage I/O stopped.
+
+[EventTransportConfig](src/main/java/id/mydev/peoplecore/infrastructure/queue/EventTransportConfig.java) validates queue redrive and retention topology at startup. The retention-check exception requires the `local` profile and a loopback endpoint. Start the emulator with `docker compose up -d sqs`; the queue definitions are in [local/sqs/elasticmq.conf](local/sqs/elasticmq.conf).
+
+Notifications preserve the intended employee/account/assignment and verified destination version. Invitations use KMS-protected material bound to the invitation and destination. An uncertain send becomes `UNKNOWN` and is not automatically resent. Synchronous acceptance, correlated feedback and evidence-based reconciliation share the invitation-summary mapping. Destination replacement creates linked work while retaining the original delivery; invitations require authorized reissuance instead.
+
+Failure attention is durable and idempotent per event/delivery generation/code, including trusted SES failures and missing destinations. The independent alert worker polls every five seconds and sends only attention/event/delivery references, code and creation time to a configured webhook. HTTPS is required except for loopback HTTP; redirects are disabled, authentication uses a configured bearer token, and calls are bounded at two seconds. A 2xx response acknowledges the alert. Failures retry after 30 seconds, while lease fencing recovers crashed workers. The webhook receives the attention UUID as `Idempotency-Key` and must deduplicate repeat delivery after an uncertain acknowledgment. The Operations attention count includes all unacknowledged alerts without an age window. Sending and feedback workers reject startup without the alert worker.
+
+Reports support attendance, leave balances, request status, reimbursements, payslip status and safe audit metadata. Ranged reports require an explicit half-open range of at most 31 days; balances select one year and payslip status selects one month. Interactive selection is bounded at 10,000 rows and a 30-second budget. Pagination defaults to 50 rows, with a maximum page size of 100. The source employee model has no name field, so response metadata marks `employeeName` unavailable where that column is present. Batch audit scope checks every employee in the current revision independently of display filters.
+
+CSV exports use the same scoped query adapters, with a 50,000-row limit, 10 MiB artifact limit and 120-second generation budget. At most two unfinished jobs are allowed per requester. Finalization requires a snapshot no older than 15 minutes, and jobs expire 24 hours after creation. Download requires current requester authority, a matching authorization generation and an unexpired boundary; content is streamed through a revocable transfer rather than a public object URL. [ReportExportConfig](src/main/java/id/mydev/peoplecore/reportexport/infrastructure/config/ReportExportConfig.java) defines private storage and transfer wiring.
+
+`peoplecore.recovery.isolated=true` suspends normal event, replay, email and export processing, export cleanup and export download grants. Its default is false.
+
+## Build and verification
 
 ```bash
 ./gradlew test
@@ -152,33 +137,30 @@ Replace the example issuer, audience, and JWKS URL with values matching your ver
 ./gradlew bootJar
 ```
 
-PostgreSQL tests require a separate `peoplecore_tests` database, defaulting to `jdbc:postgresql://localhost:54339/peoplecore_tests`, with `peoplecore_test` credentials. Override these with `PEOPLECORE_TEST_DB_URL`, `PEOPLECORE_TEST_DB_USERNAME`, and `PEOPLECORE_TEST_DB_PASSWORD`. The test administrator needs permission to create isolated schemas and temporary runtime roles; fixtures remove them afterward. Never point these tests at the application database.
+`test` excludes PostgreSQL-tagged tests. `postgresIntegrationTest` uses a separate database named `peoplecore_tests`, defaulting to `jdbc:postgresql://localhost:54339/peoplecore_tests`. Configure its credentials with `PEOPLECORE_TEST_DB_USERNAME` and `PEOPLECORE_TEST_DB_PASSWORD`, and override the URL with `PEOPLECORE_TEST_DB_URL`. The [PostgresFixture](src/test/java/id/mydev/peoplecore/support/PostgresFixture.java) creates isolated schemas and temporary runtime roles, then removes them. Its administrator therefore needs schema/role creation privileges. Do not use the application database for these tests.
 
-`check` requires ordinary and PostgreSQL execution data and enforces at least 85% line and branch coverage. Migrations reject invalid existing assignment intervals rather than rewriting history.
+`check` runs both test groups and requires their JaCoCo execution data, with minimum 85% line and branch coverage. Test and coverage output is written under `build/reports/`. `bootJar` packages the application and document-parser runtime. Optional local integration tests use `PEOPLECORE_SQS_TEST_ENDPOINT` and `PEOPLECORE_R2_LOCAL_S3_ENDPOINT` when their services are available.
 
-### Work calendars and context
+The executable verification helpers include [local/verify-sqs.py](local/verify-sqs.py), [local/verify-keycloak.mjs](local/verify-keycloak.mjs) and [local/security/check.sh](local/security/check.sh). The security helper scans built artifacts/images and uses `TRIVY_BIN` to select the scanner. The CI configuration in [.github/workflows/backend-check.yml](.github/workflows/backend-check.yml) builds the local services, runs backend verification and service contracts, then runs security scans and uploads the generated results.
 
-HR publishes reusable immutable configuration with `POST /api/v1/attendance/schedule-revisions` and `/calendar-revisions` (Idempotency-Key required). Current HR operators may retrieve published catalogs with GET on those paths (`page=0&size=20`, maximum size 100), and full configuration with GET `/{id}`. Employee identities do not grant catalog access.
+### Local invitation delivery verification
 
-Use `POST /api/v1/attendance/publish-preview` before assigning a revision. Assignment commands under `/api/v1/employees/{employeeId}/schedule-assignments` and `/calendar-assignments` require `expectedFingerprint`; stale context returns 409 and requires a new preview. Publish itself has no fingerprint because applicability changes only with assignments. Backdated assignments require a reason. `GET /api/v1/employees/{employeeId}/work-context?from=2026-10-01&to=2026-11-01` returns the half-open range, at most 366 days, without pinning evidence. Missing context appears as a per-date blockedReason. Owner reads require a current binding and effective role; HR reads require current target coverage.
-
-Correction routing is published and activated through `/api/v1/approval/attendance-rule-sets`. `GET /api/v1/approval/attendance-rule-sets/route-preview?employeePublicId=<uuid>` reads the currently activated configuration for one employee and returns `ruleSetPublicId`, `reviewerAccountPublicId`, and `blockedReason`. It reserves nothing, mutates nothing, and requires the same read scope as employee context: the employee's own active binding or current HR coverage of the target unit. A blocked configuration returns a null reviewer with a reason such as `NO_MATCHING_RULE`, `AMBIGUOUS_RULE`, or `REVIEWER_UNAVAILABLE`; it never falls back to another reviewer.
-
-Apply migrations using owner credentials before rerunning `local/postgres/provision-runtime.sql` for runtime grants. V14 supplies context storage, V15 seals assignment provenance, and V16–V18 define attendance recording, entitlement and leave workflow storage. All application instances must participate in the shared `profile-admission` protocol to coordinate context and authority changes with reads and commands. See [architecture](architecture.md#attendance-and-annual-leave) for admission ordering and canonical evidence.
-
-Security artifacts include `*-all-severities.json`, the HIGH/CRITICAL scan result, and `*-review.json` with vulnerability dispositions. Inspect lower-severity results even when the configured threshold passes.
-
-### Local image security checks
-
-Local service Dockerfiles pin their base images and apply fixed minimum Alpine package versions. The Keycloak helper also pins Guava, MariaDB and OpenTelemetry API/context JARs by SHA256, runs Quarkus augmentation, and copies the patched distribution into a clean runtime stage. Bootstrap aliases resolve to the patched JARs.
-
-Build the backend and service images before scanning their dependencies:
+`NotificationContextPostgresTest.localDummyProviderCompletesAuthorizedInvitationAndIntendedIdentityActivation` exercises the local application flow with PostgreSQL and an in-process `EmailProvider` fixture. It verifies authorized invitation issue, durable worker delivery, captured invitation content, rejection for a different identity and activation for the intended issuer/subject. This fixture does not call SES or claim mailbox delivery.
 
 ```bash
-./gradlew bootJar
-docker compose build
-python3 -m unittest discover -s local/security -p 'test_*.py'
-bash local/security/check.sh
+./gradlew postgresIntegrationTest --tests 'id.mydev.peoplecore.notification.application.NotificationContextPostgresTest' --no-daemon
 ```
 
-The scanner defaults to `trivy`; set `TRIVY_BIN` to use another executable path and `SECURITY_REPORT_DIR` to change the report directory. `local/security/check.sh` produces backend/image SBOMs, verifies the SQS runtime JAR inventory, scans every severity, and confirms that a vulnerable fixture fails the HIGH/CRITICAL threshold. The `Backend checks` workflow runs the Gradle checks, local service contract checks, and security scans, then uploads their reports.
+### Configured invitation verification helper
+
+[local/verify-invitation.mjs](local/verify-invitation.mjs) provides separate issuance and mailbox-activation phases. Use an unbound controlled employee and an explicitly configured application environment. Issuance sets the verified destination, creates an invitation and waits up to five minutes for provider acceptance evidence. Activation consumes the link received in the controlled mailbox, first checks denial for a different authenticated identity, then verifies the intended binding. The API-returned secret is never used for activation; tokens, mailbox links and secrets are omitted from output.
+
+Both phases require `PEOPLECORE_API_URL`, `PEOPLECORE_EXPECTED_ISSUER` and `PEOPLECORE_EXPECTED_SUBJECT`. Issuance also requires `PEOPLECORE_OPERATOR_TOKEN`, `PEOPLECORE_CONTROLLED_EMPLOYEE_ID`, `PEOPLECORE_VERIFIED_IDENTITY_REF` and `PEOPLECORE_CONTROLLED_RECIPIENT`. Activation requires `PEOPLECORE_INVITATION_MAILBOX_LINK`, `PEOPLECORE_WRONG_IDENTITY_TOKEN` and `PEOPLECORE_RECIPIENT_TOKEN`. Supply sensitive values through the environment.
+
+```bash
+node --test local/verify-invitation.test.mjs
+PEOPLECORE_ALLOW_LIVE_EMAIL=YES node local/verify-invitation.mjs issue
+PEOPLECORE_ALLOW_LIVE_EMAIL=YES node local/verify-invitation.mjs activate
+```
+
+The helper tests substitute HTTP responses and send no email. The local PostgreSQL test above verifies application behavior without AWS. The optional live phases require a separately configured provider environment and are outside local acceptance evidence.

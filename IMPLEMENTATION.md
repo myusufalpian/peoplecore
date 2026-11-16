@@ -1,355 +1,205 @@
-# Implementation Overview
+# Implementation
 
-Peoplecore implements employee records, effective-dated organization assignments, identity enrollment, reviewed contact-profile changes, attendance, leave, private documents, reimbursement, and payslip publication on a Spring Boot backend. PostgreSQL stores domain state, command receipts, append-only audit records, and pending outbox events. Public API references use UUIDs.
+This file describes behavior implemented by the Java application, its SQL migrations, configuration classes and automated tests. Paths below point directly to those executable sources.
 
-## Implemented capabilities
+## Runtime and persistence
 
-- Employee creation, employee-number changes, and employment start/end date updates.
-- Organization assignments with a unit, job level, optional manager public UUID, and a start-inclusive/end-exclusive interval.
-- Assignment revisions that preserve the original row, retain an earlier interval when necessary, and expose supersession ancestry in history.
-- Invitation issuance/reissue, identity activation, offboarding, reassociation, rehire, and explicit role restoration.
-- JWT signature, issuer, expiration, and audience validation, followed by live account, role, binding, and organization-scope checks.
-- Typed success/error responses, centralized exception mapping, correlation IDs, bounded JSON input, and CSRF protection for applicable requests.
-- Canonical request hashing, idempotency receipts, PostgreSQL advisory locks, and atomic domain/receipt/audit/outbox writes.
-- Explicit Flyway migrations, schema validation, runtime database-role checks, dependency inventories, and vulnerability scanning thresholds.
-- Bounded profile-rule publication, organization-wide global activation, and shared preview/submission evaluation with a designated HR reviewer.
-- Employee-owned proposals, separate active contact values, return/edit/resubmit, reasoned HR decisions/reassignment, and explicit blocked-route recovery.
-- Database-sealed content, touched-field conflict counters, scoped queues/history, current receipt authorization, and atomic approval/application.
-- Effective-dated work schedules and holiday calendars, preview-bound employee assignments, and canonical work occurrences with pinned evidence.
-- Self-only clock actions with inclusive server-time windows, one IN/OUT pair per occurrence, and corrections that keep sealed evidence and reviewer routing.
-- Annual leave openings and signed adjustments in integer half units, with reservation, exact consumption and single reversal.
-- Manager-then-designated-HR leave requests, blocked-route recovery, whole cancellation, and scoped balance, ledger and portion summaries.
-- Typed attendance and leave rule sets with separate publication and activation, plus advisory route preview.
-- Private document staging uploads, leased verification, immutable verified versions, authorized streaming, legal holds, and retryable object cleanup.
-- Effective-dated reimbursement categories, sealed evidence revisions, manager/Finance decisions, and payment history.
-- Reviewed payslip batches, immutable publication history, and one current publication per employee and month.
+The application uses Java 25, Spring Boot, Spring MVC, Spring Security, Spring Data JPA, JDBC and PostgreSQL. API and worker processes use the same application with different runtime roles:
 
-HTTP DTO mappers, application result mappers, and audit/outbox trail mappers keep representation logic separate from mutation services.
+| Property | Behavior |
+|---|---|
+| `peoplecore.runtime.role=api` | Default role; starts a servlet application. |
+| `peoplecore.runtime.role=worker` | Starts without a web server. Conditional worker components poll queues or durable database work. |
+| Any other runtime role | Startup fails. |
 
-## Employee and assignment behavior
+[RuntimeEnvironmentPostProcessor](src/main/java/id/mydev/peoplecore/infrastructure/profile/RuntimeEnvironmentPostProcessor.java) disables automatic Flyway execution for both roles. Apply schema migrations explicitly with the migration entry point:
 
-Employee-number uniqueness is enforced. Creating an employee requires organization-wide HR authority; updates require HR coverage of the employee's current unit. Employment start is required when setting employment dates, and an end date cannot precede it. Omitting the end date clears it. These business dates are independent of account access cutoff and do not change employee status.
-
-Assignments validate the configured unit allowlist, manager existence, job level, interval order, and overlap with non-superseded assignments. A manager cannot reference the same employee. Timestamp boundaries are truncated to PostgreSQL microsecond precision before validation, overlap checks, persistence, and response mapping; collapsed intervals are rejected.
-
-A revision begins within the selected assignment interval. The original row keeps its interval and receives `supersededAt`. A later revision boundary creates a retained prefix and replacement, both linked to the original public UUID through `supersedesId`. Employee locking serializes writes. Authorization covers the current, original, and replacement units. Audit details retain before/after values and the retained prefix identifier.
-
-Employee detail returns all assignment history, including superseded rows, with manager public UUIDs. History uses one scalar database projection and derives the current unit from that same result before authorizing disclosure. Reads require applicable HR scope or the employee's own active binding with an effective role; unavailable or out-of-scope employee reads return `404`.
-
-## Identity and access behavior
-
-Invitation issue/reissue and rebind require both applicable `HR_ADMIN` scope and an effective organization-wide `SYSTEM_ADMIN` grant. The operator supplies a verified expected issuer/subject and a non-secret identity reference; external identity evidence is verified through controlled operator procedures. The server enforces caller authority and required references.
-
-Invitations expire after seven days. The plaintext secret appears only in the initial issuance response; receipt replay returns invitation metadata with no secret. Stored invitations contain a secret hash, and new receipts, audit records, and outbox payloads exclude the plaintext. Reissue revokes outstanding invitations and preserves the first known revocation time.
-
-Activation requires the matching JWT issuer/subject, a valid secret, an issued and unexpired invitation, and active employment. Binding creation, invitation consumption, and the EMPLOYEE grant commit together. Database constraints enforce one active binding per employee, account, and issuer/subject.
-
-Activation admission reserves durable capacity in a separate transaction: 20 attempts per principal and five per principal/invitation pair in 15 minutes, plus 30 non-recipient attempts per known invitation. The expected recipient is exempt from the shared invitation limit. Failed commands and receipt replays consume capacity; supported rejection audits survive command rollback. Throttling returns `429`.
-
-Offboarding immediately marks employment inactive and revokes outstanding invitations. A bound account remains usable until its configured `accessEndsAt`, then fails live access checks at that exact instant. Optional local cutoff time/timezone values are metadata; the request must supply the resolved cutoff instant. Rehire restores employee status only. Explicit access restoration requires active employment and a binding; privileged role restoration additionally requires organization-wide HR and system authority.
-
-Rebind revokes the old binding, ends the old account's roles, and cuts off its access. An existing earlier cutoff is carried to the replacement account. Token role claims do not grant application roles. Basic authentication remains in the shared HTTP chain but does not establish the verified identity required by these business endpoints.
-
-## API contract
-
-Every endpoint below requires a verified JWT. Every mutation also requires `Idempotency-Key`, nonblank, at most 128 characters, and without a NUL character. Required request fields are shown without a question mark; `?` indicates an optional field.
-
-| Method | Path | Request fields | Success |
-| --- | --- | --- | --- |
-| GET | `/api/v1/me/access` | — | `200`, current account, roles, employee binding, cutoff, authorization generation |
-| POST | `/api/v1/employees` | `employeeNumber` | `201`, employee |
-| GET | `/api/v1/employees/{id}` | — | `200`, employee and assignment history |
-| PUT | `/api/v1/employees/{id}` | `employeeNumber` | `200`, employee |
-| PUT | `/api/v1/employees/{id}/employment` | `startDate`, `endDate?`, `reason` | `200`, employee |
-| POST | `/api/v1/employees/{id}/assignments` | `orgUnit`, `jobLevel`, `validFrom`, `validTo?`, `managerId?` | `201`, assignment |
-| POST | `/api/v1/employees/{id}/assignments/{assignmentId}/revisions` | Assignment fields plus `reason` | `201`, replacement assignment |
-| POST | `/api/v1/enrollments/invitations` | `employeeId`, `intendedIdentityRef`, `expectedIssuer`, `expectedSubject` | `201`, invitation |
-| POST | `/api/v1/enrollments/employees/{id}/invitations` | `intendedIdentityRef`, `expectedIssuer`, `expectedSubject` | `201`, replacement invitation |
-| POST | `/api/v1/enrollments/activations` | `invitationId`, `secret` | `200`, binding |
-| POST | `/api/v1/enrollments/employees/{id}/offboard` | `accessEndsAt`, `cutoffTime?`, `cutoffTimezone?`, `reason?` | `200`, `OFFBOARDED` |
-| POST | `/api/v1/enrollments/employees/{id}/rebind` | `newIssuer`, `newSubject`, `reason` | `200`, `REBOUND` |
-| POST | `/api/v1/enrollments/employees/{id}/rehire` | `reason?` | `200`, `REHIRED` |
-| POST | `/api/v1/enrollments/employees/{id}/access-restore` | `roles`, `scope?`, `reason?` | `200`, `ACCESS_RESTORED` |
-
-Use a token issued for the configured issuer and audience to inspect live access:
-
-```bash
-curl --fail-with-body http://localhost:8080/api/v1/me/access \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+```sh
+export PEOPLECORE_MIGRATION_DB_URL='jdbc:postgresql://localhost:54329/peoplecore'
+export PEOPLECORE_MIGRATION_DB_USERNAME='<migration-user>'
+export PEOPLECORE_MIGRATION_DB_PASSWORD='<migration-password>'
+./gradlew migrate
 ```
 
-Example JSON for `POST /api/v1/employees/{id}/assignments`, sent with `Content-Type: application/json`, `Authorization: Bearer ...`, and a new `Idempotency-Key`:
+[MigrationRunner](src/main/java/id/mydev/peoplecore/infrastructure/migration/MigrationRunner.java) requires all three environment variables. Runtime credentials are separate from migration credentials. The local profile reads `PEOPLECORE_RUNTIME_DB_PASSWORD` and uses Hibernate schema validation. SQL migrations define the tables, constraints, immutable histories and authorization-generation triggers under [the migration source directory](src/main/resources/db/migration).
 
-```json
-{
-  "orgUnit": "ENG",
-  "jobLevel": "L2",
-  "managerId": null,
-  "validFrom": "2026-10-10T00:00:00Z",
-  "validTo": null
-}
+## Authentication and command execution
+
+[ApiSecurityConfig](src/main/java/id/mydev/peoplecore/common/security/ApiSecurityConfig.java) requires authentication for every HTTP request. HTTP Basic is configured; JWT resource-server support is installed when `peoplecore.security.jwt.jwks-uri` is present. [SecurityJwtConfig](src/main/java/id/mydev/peoplecore/identity/infrastructure/config/SecurityJwtConfig.java) then requires an issuer and audience, validates the issuer and expiration, requires an expiration claim and checks audience membership.
+
+Business access comes from persisted accounts, bindings and effective role assignments. Token identity alone does not establish an employee binding or grant a domain role. Current account state, role scope and the relevant employee/assignment are checked by application services.
+
+Mutation endpoints that declare `Idempotency-Key` require a non-blank value of at most 128 characters with no NUL character. Reuse the same key for the same logical request; use a new key for a different request. [CommandExecutionService](src/main/java/id/mydev/peoplecore/common/command/CommandExecutionService.java) coordinates command receipts, authorization checks, domain work, audit records and outbox events. Command-specific adapters supply the payload, result mapping and authorization checks. Receipt replay does not replace current authorization.
+
+Identifiers exposed by HTTP endpoints are public UUIDs. JPA/database row IDs stay inside persistence and application boundaries. Most business controllers return an `ApiData` envelope; report-export endpoints return their summary directly. Inspect the individual controller before assuming one response envelope for every route.
+
+## Implemented domain entry points
+
+| Domain | HTTP roots and supported operations | Executable entry point |
+|---|---|---|
+| Employee history | `/api/v1/employees`: create/read, employee-number update, employment dates, assignments and assignment revisions | [EmployeeController](src/main/java/id/mydev/peoplecore/organization/api/controller/EmployeeController.java) |
+| Identity lifecycle | `/api/v1/enrollments`: issue/reissue invitations, activate bindings, offboard, rebind, rehire and restore access; `/api/v1/me/access` reads current access | [EnrollmentController](src/main/java/id/mydev/peoplecore/identity/api/controller/EnrollmentController.java), [MeController](src/main/java/id/mydev/peoplecore/identity/api/controller/MeController.java) |
+| Contact-profile changes | Own contact profile, draft proposals, submit/resubmit/withdraw, decisions, reassign/retry routing, detail/history and HR correction | [ProfileProposalController](src/main/java/id/mydev/peoplecore/organization/api/controller/ProfileProposalController.java) |
+| Attendance context | Schedule/calendar revisions, publication preview, employee context assignments and effective work context | [AttendanceContextController](src/main/java/id/mydev/peoplecore/attendance/api/controller/AttendanceContextController.java) |
+| Attendance recording | `/api/v1/attendance/clock-actions`, corrections, actions and history | [AttendanceRecordingController](src/main/java/id/mydev/peoplecore/attendance/api/controller/AttendanceRecordingController.java) |
+| Leave | Entitlement opening/adjustment/ledger/balances; requests, portions, cancellation flows, approval rules and routing preview | [LeaveEntitlementController](src/main/java/id/mydev/peoplecore/leave/api/controller/LeaveEntitlementController.java), [LeaveWorkflowController](src/main/java/id/mydev/peoplecore/leave/api/controller/LeaveWorkflowController.java) |
+| Private files | `/api/v1/documents`: upload metadata, upload reservation, finalize, status/content, holds and deletion lifecycle | [DocumentUploadController](src/main/java/id/mydev/peoplecore/document/api/DocumentUploadController.java), [DocumentContentController](src/main/java/id/mydev/peoplecore/document/api/DocumentContentController.java) |
+| Reimbursement | `/api/v1/reimbursement`: category publication, claim drafts, workflow actions, history and authorized evidence content | [ReimbursementController](src/main/java/id/mydev/peoplecore/reimbursement/api/controller/ReimbursementController.java) |
+| Payslips | `/api/v1/payslips/batches`: create/edit/review/publish/read; employee publication list and authenticated content | [PayslipBatchController](src/main/java/id/mydev/peoplecore/payslip/api/PayslipBatchController.java), [PayslipDownloadController](src/main/java/id/mydev/peoplecore/payslip/api/PayslipDownloadController.java) |
+
+The document, reimbursement and payslip HTTP surfaces are conditional on their respective `peoplecore.documents.enabled`, `peoplecore.reimbursement.enabled` and `peoplecore.payslip.enabled` properties. Their presence does not bypass service-level authorization or required storage/verification dependencies.
+
+## Private-file flow
+
+1. Create metadata with `POST /api/v1/documents/uploads`, including `employeeId`, `purpose`, `fileName`, `mediaType` and `byteSize`. The controller limits the declared size to 10 MiB.
+2. Reserve a presigned upload URL with `POST /api/v1/documents/{documentId}/upload-url` and upload the bytes to the reserved location.
+3. Call `POST /api/v1/documents/{documentId}/finalize`. Finalization and verification are separate from merely obtaining an upload URL.
+4. Read `GET /api/v1/documents/{documentId}` for status. Content reads use authenticated application endpoints rather than exposing a permanent private-object URL.
+
+All three mutation routes require `Idempotency-Key`. [DocumentUploadController](src/main/java/id/mydev/peoplecore/document/api/DocumentUploadController.java) rejects creation/reservation/finalization with service-unavailable when the verification scheduler is unavailable. Verification, scanner and transfer dependencies are configured separately in [the document configuration package](src/main/java/id/mydev/peoplecore/document/infrastructure/config).
+
+Reimbursement evidence and published payslip reads pass their domain-specific authorization into document content access. [RevocableDocumentTransfer](src/main/java/id/mydev/peoplecore/document/application/service/RevocableDocumentTransfer.java) bounds transfer concurrency and periodically checks continued authorization. Legal holds and deletion state are explicit persisted lifecycle data, exposed through [DocumentHoldController](src/main/java/id/mydev/peoplecore/document/api/DocumentHoldController.java) and [DocumentDeletionController](src/main/java/id/mydev/peoplecore/document/api/DocumentDeletionController.java).
+
+## Durable event processing
+
+[EventRoutingPolicy](src/main/java/id/mydev/peoplecore/common/outbox/EventRoutingPolicy.java) is the event-name allowlist. Metadata-only events are retained as command/outbox evidence but marked ignored by publication. Known asynchronous events route to `notifications`, except `EXPORT_REQUESTED`, which routes to `exports`. Unknown asynchronous input is quarantined rather than dispatched to an arbitrary handler.
+
+[EventDispatchService](src/main/java/id/mydev/peoplecore/common/outbox/EventDispatchService.java) claims publication work in a short transaction, sends outside that transaction and records completion against the claimed generation. Failure defers work with jittered backoff. A known event whose handler is unavailable remains deferred rather than being acknowledged as completed.
+
+[EventIngestionService](src/main/java/id/mydev/peoplecore/common/outbox/EventIngestionService.java) admits consumer/event identity and invokes matching handlers in one transaction. It rejects a wrong consumer, an event more than 60 seconds in the future, an event older than the 14-day replay horizon, or an unsupported event. Inbox admission prevents the same consumer/event pair from repeating materialization after normal redelivery.
+
+[EventTransportConfig](src/main/java/id/mydev/peoplecore/infrastructure/queue/EventTransportConfig.java) starts the SQS transport only when `peoplecore.events.enabled=true` and the runtime role is `worker`. Configure a region and source/DLQ URLs for both consumers. Queue endpoints require HTTPS except for loopback HTTP. Retention validation defaults on; disabling it is restricted to the local profile with a loopback endpoint. The queue adapter validates topology before starting.
+
+The conditional Operations API is `/api/v1/operations/event-replays`:
+
+- `POST` creates a reasoned replay with `consumer`, `reason` and up to 100 `eventIds`, using an idempotency key.
+- `GET /{id}` reads the replay.
+- `POST /{id}/cancel` requests cancellation with a reason.
+
+[EventReplayService](src/main/java/id/mydev/peoplecore/common/outbox/EventReplayService.java) enforces Operations authority and replay constraints. Replay republishes existing event identity; it does not rerun the original business command. The dispatcher pauses replay publication while the oldest normal pending publication is older than 300 seconds.
+
+## Notifications and invitation delivery
+
+[NotificationIntentService](src/main/java/id/mydev/peoplecore/notification/application/NotificationIntentService.java) and domain resolvers materialize delivery work from stored event-time intent. The delivery pins recipient, account/assignment context, template and verified destination identity/version. A later address or reviewer change does not silently retarget old work.
+
+[NotificationTransactions](src/main/java/id/mydev/peoplecore/notification/application/NotificationTransactions.java) separates claim, preparation and completion into transactions. Preparation rechecks the claimed generation, live lease, account/domain eligibility and the pinned current verified destination. Ineligible work becomes `SUPPRESSED`. Ordinary messages contain event/reference metadata and an authenticated application link. Invitation messages carry the activation secret in the URL fragment, generated from identity-owned encrypted material.
+
+[NotificationWorker](src/main/java/id/mydev/peoplecore/notification/application/NotificationWorker.java) calls SES outside the preparation transaction. A definitely-unsent retryable failure can return normal work to `PENDING`, up to three attempts. An uncertain result becomes `UNKNOWN`; it is not automatically resent. Manual attempts do not receive the normal automatic retry sequence. The worker pauses when `peoplecore.recovery.isolated=true`.
+
+[NotificationAcceptance](src/main/java/id/mydev/peoplecore/notification/application/NotificationAcceptance.java) is shared by synchronous completion, trusted SES feedback and Operations reconciliation. It locks admission, then the exact identity-owned invitation context, then the delivery. Mapping invitation `deliveryStatus` to `SENT` requires persisted `ACCEPTED` or `DELIVERED` state, matching generation and the current attempt UUID. Stale evidence cannot mark another current attempt accepted. A valid historical acceptance can still update this summary after invitation revocation, expiry or ciphertext disposal; that update does not reactivate the invitation or create another send.
+
+[KmsInvitationCipher](src/main/java/id/mydev/peoplecore/identity/infrastructure/delivery/KmsInvitationCipher.java) protects invitation material. [JdbcNotificationIdentityRepository](src/main/java/id/mydev/peoplecore/identity/infrastructure/persistence/JdbcNotificationIdentityRepository.java) binds acceptance to the immutable invitation/employee/destination/version tuple and disposes invalid invitation ciphertext in bounded batches. Invitation-source identities, attempts and evidence are protected by [the notification integrity migration](src/main/resources/db/migration/V30__protect_notification_identity.sql).
+
+[SesFeedbackService](src/main/java/id/mydev/peoplecore/notification/application/SesFeedbackService.java) accepts correlated Send, Delivery, Bounce, Complaint, Reject and Rendering Failure evidence through the feedback worker. Parsing is bounded, the configured SNS topic is checked and the repository correlates delivery, attempt and provider message identity. Bounce/complaint evidence suppresses the destination. [SesFeedbackWorker](src/main/java/id/mydev/peoplecore/notification/infrastructure/provider/SesFeedbackWorker.java) validates the configured SQS/SNS source policy; there is no public HTTP feedback route.
+
+### Notification configuration
+
+| Enablement | Additional configuration used by the implementation |
+|---|---|
+| `peoplecore.notifications.enabled=true` | `peoplecore.notifications.region`, `peoplecore.notifications.invitation-key-id`, HTTPS `peoplecore.notifications.application-url`; creates KMS-backed invitation services and Operations endpoints. |
+| `peoplecore.notifications.send.enabled=true` with notifications enabled | `peoplecore.notifications.sender`, `peoplecore.notifications.configuration-set`; the send lifecycle runs only in the worker role. |
+| `peoplecore.notifications.feedback.enabled=true` with notifications and events enabled | `peoplecore.notifications.feedback.queue-url`, `peoplecore.notifications.feedback.topic-arn`; feedback consumption runs only in the worker role. |
+
+The opt-in conditions above do not match when their enablement properties are absent. Credential resolution is performed by the configured AWS SDK clients.
+
+Verified destinations are written through `PUT /api/v1/enrollments/employees/{id}/notification-destination`, with `address`, `evidenceRef`, `reason` and `Idempotency-Key`. [NotificationDestinationService](src/main/java/id/mydev/peoplecore/identity/application/service/NotificationDestinationService.java) performs the authorization and persists verification evidence.
+
+### Operations actions
+
+[NotificationSupportController](src/main/java/id/mydev/peoplecore/notification/api/NotificationSupportController.java) exposes `/api/v1/operations/notification-deliveries` when notifications are enabled. List/detail/evidence/attention reads and retry/reconcile/replacement mutations require [NotificationSupportService](src/main/java/id/mydev/peoplecore/notification/application/NotificationSupportService.java) authorization.
+
+| Route suffix | Mutation input and behavior |
+|---|---|
+| `/{id}/retry` | `expectedVersion`, `reason`, `acknowledgePossibleDuplicate`; UNKNOWN requires explicit duplicate acknowledgement. |
+| `/{id}/reconcile` | `expectedVersion`, `reason`, persisted `evidenceId`; applies correlated provider evidence through the shared acceptance mapping. |
+| `/{id}/replacements` | Same input shape as retry; creates linked fresh delivery work using a changed verified destination and preserves the original recipient/account/assignment/template. |
+
+Each mutation requires `Idempotency-Key`. Invitations reject the replacement path and require authorized identity reissuance because their encrypted secret is bound to the original destination. The service checks current global Operations authority, optimistic version, reason, idempotency, recovery isolation and a support-action budget.
+
+## Reports and audit search
+
+With `peoplecore.reports.enabled=true`, [ReportController](src/main/java/id/mydev/peoplecore/reporting/api/ReportController.java) exposes:
+
+| GET path | Time selector |
+|---|---|
+| `/api/v1/reports/attendance` | `from` and exclusive `to` |
+| `/api/v1/reports/leave-balances` | `year` |
+| `/api/v1/reports/request-status` | `from` and exclusive `to` |
+| `/api/v1/reports/reimbursements` | `from` and exclusive `to` |
+| `/api/v1/reports/payslip-status` | `month`, formatted as `YYYY-MM` |
+| `/api/v1/audit-events` | `from` and exclusive `to` |
+
+[ScopedReportService](src/main/java/id/mydev/peoplecore/reporting/application/ScopedReportService.java) supports report version 1. Date-range reports require an explicit non-empty interval of at most 31 days. Leave balances require one entitlement year; payslip status requires one month. Unsupported combinations and unknown status/workflow values are rejected. Optional employee/unit/status/workflow/category and audit-specific filters are validated before execution.
+
+Reports execute authorization and domain-owned query adapters in a read-only Repeatable Read snapshot. The snapshot records database time, canonical filter hash, authorization generation and the next scheduled authorization boundary. Interactive results are capped at 10,000 rows; export snapshots are capped at 50,000 rows. An oversized result fails rather than returning a silently truncated report. The service uses deadlines and a 30-second snapshot transaction timeout; query adapters also bound JDBC query time.
+
+[ReportDtoMapper](src/main/java/id/mydev/peoplecore/reporting/api/ReportDtoMapper.java) defaults to 50 rows per response and permits page sizes from 1 to 100. It returns `nextCursor`, `totalRows`, `reportVersion`, `filterHash`, `dataAsOf`, timezone `Asia/Jakarta`, `historical=false` and `unavailableColumns`. A cursor binds the filter hash and offset; each HTTP request still reads a fresh authorized snapshot. It is not a retained historical snapshot. Employee names are currently unavailable and reported through `unavailableColumns` when that column is present.
+
+[ReportAuthorizationService](src/main/java/id/mydev/peoplecore/identity/application/service/ReportAuthorizationService.java) establishes active account/report authority; individual domain adapters apply current subject scope. Audit search projects safe event/actor/action/domain/resource/timestamp/reason-presence metadata, not raw audit details or reason text.
+
+[JdbcAuditReportQuery](src/main/java/id/mydev/peoplecore/common/audit/infrastructure/persistence/JdbcAuditReportQuery.java) requires authority over every subject in the current revision of a payslip batch. For each subject, effective HR or Finance scope must cover the current organizational unit, or the caller must have the explicit global Operations exception. Employee/unit/resource filters cannot reduce the subject set used for this check. The same adapter supplies audit export rows.
+
+Example GET requests, with an already-issued valid token:
+
+```sh
+export PEOPLECORE_API_URL='https://peoplecore.example.test'
+export PEOPLECORE_ACCESS_TOKEN='<access-token>'
+curl --fail-with-body --get "$PEOPLECORE_API_URL/api/v1/reports/attendance" \
+  -H "Authorization: Bearer $PEOPLECORE_ACCESS_TOKEN" \
+  --data-urlencode 'from=2026-11-01' \
+  --data-urlencode 'to=2026-12-01' \
+  --data-urlencode 'size=50'
+
+curl --fail-with-body --get "$PEOPLECORE_API_URL/api/v1/audit-events" \
+  -H "Authorization: Bearer $PEOPLECORE_ACCESS_TOKEN" \
+  --data-urlencode 'from=2026-11-01' \
+  --data-urlencode 'to=2026-12-01' \
+  --data-urlencode 'workflowType=PAYSLIP_BATCH'
 ```
 
-The unit must be configured and the caller must hold applicable HR authority. A successful assignment response uses this shape:
+## CSV export lifecycle
 
-```json
-{
-  "data": {
-    "id": "d3352b7b-c911-4bb4-b373-bfa91f40ab12",
-    "orgUnit": "ENG",
-    "jobLevel": "L2",
-    "validFrom": "2026-10-10T00:00:00Z",
-    "validTo": null,
-    "managerId": null,
-    "supersededAt": null,
-    "supersedesId": null
-  },
-  "metadata": {}
-}
-```
+With `peoplecore.exports.enabled=true`, [ReportExportController](src/main/java/id/mydev/peoplecore/reportexport/api/ReportExportController.java) exposes:
 
-Employee responses contain `id`, `employeeNumber`, `status`, `createdAt`, `employmentStartDate`, and `employmentEndDate`. Binding responses contain `employeeId`, `issuer`, `subject`, and `createdAt`. Invitation responses contain `id`, `employeeId`, `intendedIdentityRef`, `status`, `deliveryStatus`, `expiresAt`, and `secret`; the secret is unavailable on replay.
+- `POST /api/v1/report-exports`: validates `format=CSV`, a versioned report request and `Idempotency-Key`; returns HTTP 202 with a summary and `Location`.
+- `GET /api/v1/report-exports/{id}`: returns an owned job summary after fresh report authorization.
+- `GET /api/v1/report-exports/{id}/content`: streams owned READY content after fresh authorization, using `Cache-Control: no-store`, a CSV attachment filename and `nosniff`.
 
-Validation failures use field/message pairs:
+[ReportExportService](src/main/java/id/mydev/peoplecore/reportexport/application/ReportExportService.java) allows at most two unfinished jobs per requester and expires jobs 24 hours after creation. Job creation records requester identity and a canonical report request in the command transaction. [ReportExportWorker](src/main/java/id/mydev/peoplecore/reportexport/application/ReportExportWorker.java) generates rows from the same scoped report service and uploads an immutable candidate.
 
-```json
-{
-  "key": "VALIDATION_ERROR",
-  "message": "Request validation failed.",
-  "timestamp": "2026-10-10T10:15:30Z",
-  "details": [
-    { "field": "employeeNumber", "message": "must not be blank" }
-  ]
-}
-```
+Publication requires the current lease generation, a live lease, unexpired job, snapshot age no greater than 15 minutes, current report authorization, unchanged authorization generation and no passed scheduled boundary. Failed authorization invalidates the job instead of publishing stale data. Download repeats ownership/account/report/generation/boundary/expiry checks and rechecks during the bounded revocable transfer. Job ownership alone is insufficient to read the artifact.
 
-Errors omit `details` when no field-level details exist. Security handlers provide the appropriate authentication challenge. Malformed input, access denial, missing resources, conflicts, oversized bodies, throttling, and service failures use typed HTTP errors rather than a success flag.
+[ReportCsvWriter](src/main/java/id/mydev/peoplecore/reportexport/application/ReportCsvWriter.java) emits UTF-8, quoted fields and CRLF rows, escapes embedded quotes, prefixes spreadsheet-formula/control-leading values and caps the generated artifact at 10 MiB. [ExportArtifactStorage](src/main/java/id/mydev/peoplecore/reportexport/infrastructure/storage/ExportArtifactStorage.java) owns immutable candidate object operations and reconciliation. Export processing, expiry and cleanup remain durable database work rather than being inferred from one queue delivery.
 
-## Contact-profile API
+Configure `peoplecore.exports.storage.endpoint`, `.region` and `.bucket` for artifact storage. Endpoint validation permits HTTPS and loopback HTTP. `peoplecore.exports.worker.enabled=true` plus the worker runtime role enables polling; the default poll interval is `PT5S`. Recovery isolation makes export service operations unavailable and pauses relevant background work.
 
-All paths below are under `/api/v1`. Mutations require the same verified JWT and `Idempotency-Key` headers as the employee APIs.
+Example creation and authenticated retrieval:
 
-| Method | Path | Request / purpose |
-| --- | --- | --- |
-| POST | `/employees/me/profile-proposals` | `changes`; create one open owner proposal, 201 |
-| PATCH | `/profile-proposals/{id}` | `expectedVersion`, `changes`; edit DRAFT or RETURNED without applying active values |
-| POST | `/profile-proposals/{id}/submit` | `expectedVersion`; submit DRAFT |
-| POST | `/profile-proposals/{id}/resubmit` | `expectedVersion`, `changes`; create a freshly evaluated revision from RETURNED |
-| POST | `/profile-proposals/{id}/withdraw` | `expectedVersion`; owner pre-approval withdrawal |
-| POST | `/profile-proposals/{id}/{approve,reject,return}` | `expectedVersion`, `revisionId`, `assignmentId`, `reason?`; assigned eligible HR only, reason mandatory for reject/return |
-| POST | `/profile-proposals/{id}/reassign` | `expectedVersion`, `assignmentId`, `replacementAccountId`, `reason`; scoped HR recovery |
-| POST | `/profile-proposals/{id}/retry-route` | `expectedVersion`; scoped HR reevaluates blocked routing against pinned original inputs |
-| GET | `/profile-proposals/{id}` | Scoped proposal detail and reviewed values |
-| GET | `/profile-proposals/{id}/history` | Bounded revision/decision/evaluation/reassignment history |
-| GET | `/profile-proposals?page=0&size=20` | Current HR scope-filtered queue |
-| GET | `/employees/me/contact-profile` | Owner active contact values and four group-version counters |
-| PATCH | `/employees/{id}/contact-profile` | Scoped HR correction; `changes`, `reason`, `expectedPhoneVersion`, `expectedEmailVersion`, `expectedAddressVersion`, `expectedEmergencyVersion` |
-| POST | `/approval/profile-rule-sets` | `rules`; scoped snapshot publication, 201 |
-| POST | `/approval/profile-rule-sets/{id}/activate` | No JSON body; organization-wide HR required for global pointer activation |
-| POST | `/approval/profile-routes/preview` | `orgUnit`, `jobLevel`, optional `employeeId`; HR-only advisory route |
-
-Proposal mutation results contain `proposalId`, `employeeId`, `state`, `proposalVersion`, `revisionId`, `revisionNumber`, `assignmentId`, and `blockedReason`. Read the returned version and current revision/assignment before forming the next command; do not infer them from a previous screen. A valid blocked submission still returns 200 and PENDING. Approval alone changes active contact values; return, reject and withdrawal do not.
-
-Detail includes `availableActions`, calculated for the current caller and state: owner actions `EDIT`, `SUBMIT`, `RESUBMIT`, `WITHDRAW`; eligible assigned-reviewer actions `APPROVE`, `REJECT`, `RETURN`; scoped HR recovery `REASSIGN`, `RETRY_ROUTING`. Only currently applicable actions appear and terminal proposals have none. The list helps clients render controls; each command independently rechecks access/version/state and is never authorized by a stale action list.
-
-History accepts `page`, `size`, `decisionPage`, `evaluationPage`, and `assignmentPage`; defaults are page 0/size 20. Size is 1–100 and all page numbers must be nonnegative. The revision page is independent of the other three proposal-wide pages. Metadata includes all four page numbers and `totalRevisions`, `totalDecisions`, `totalEvaluations`, `totalAssignments`. Continue each collection until its total is reached: `GET /profile-proposals/{id}/history?page=0&size=100&evaluationPage=1` returns older evaluations even when there is only one revision. Decisions/evaluations are latest-first with stable ID tie-breaking; reviewer assignments are chronological. Child records include public revision IDs, decisions also assignment IDs, and assignment history includes reviewer/status/reason/actor/creation/closure evidence.
-
-Each revision exposes `orgAssignmentId`, `orgAssignmentPredecessorId`, and `organizationContextStatus`: `RESOLVED` identifies the immutable effective organization-assignment row selected for submission, `NOT_EVALUATED` describes unsent content, and `UNKNOWN` explicitly represents legacy evaluated context that cannot be reconstructed. Supersession does not rewrite prior snapshots. Do not confuse these IDs with approval reviewer assignment IDs.
-
-The payload uses a bounded change list rather than an employee-shaped object. Omitted entries mean unchanged; explicit null/blank values, unknown names, duplicates, and removals are rejected. The four versioned groups are personal phone, personal email, residential address, and emergency contact. Emergency contact requires all three entries (`emergencyContactName`, `emergencyContactRelationship`, `emergencyContactPhone`) together. This does not alter account email or identity binding.
-
-Create a phone proposal:
-
-```bash
-curl --fail-with-body -X POST http://localhost:8080/api/v1/employees/me/profile-proposals \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+```sh
+curl --fail-with-body "$PEOPLECORE_API_URL/api/v1/report-exports" \
+  -H "Authorization: Bearer $PEOPLECORE_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: contact-phone-2026-10-14' \
-  --data '{"changes":[{"fieldName":"personalPhone","proposedValue":"+62 812 3456 7890"}]}'
+  -H 'Idempotency-Key: attendance-export-example-1' \
+  --data '{"format":"CSV","report":{"reportType":"ATTENDANCE","reportVersion":1,"from":"2026-11-01","to":"2026-12-01"}}'
+
+export PEOPLECORE_EXPORT_ID='<export-public-uuid>'
+curl --fail-with-body "$PEOPLECORE_API_URL/api/v1/report-exports/$PEOPLECORE_EXPORT_ID" \
+  -H "Authorization: Bearer $PEOPLECORE_ACCESS_TOKEN"
+curl --fail-with-body "$PEOPLECORE_API_URL/api/v1/report-exports/$PEOPLECORE_EXPORT_ID/content" \
+  -H "Authorization: Bearer $PEOPLECORE_ACCESS_TOKEN" \
+  --output report.csv
 ```
 
-Then submit with `POST /profile-proposals/{proposalId}/submit` and `{"expectedVersion":0}` only if the creation response actually returned version 0. Use a distinct idempotency key for the submit command. After a return, PATCH saves edited content while retaining RETURNED; resubmit is a separate command carrying the confirmed full change list and current version.
+## Automated checks
 
-For the following commands, set `PROPOSAL_ID` and `PROPOSAL_VERSION` from the latest successful response. Use the employee token for submission:
+[The Gradle build](build.gradle) separates unit/HTTP tests from PostgreSQL-tagged tests and configures combined line/branch coverage minimums of 85%. `check` depends on both test groups through coverage-data verification. The parser JAR and dependency inventory are built separately and included in application packaging.
 
-```bash
-curl --fail-with-body -X POST "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID/submit" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: contact-phone-submit-2026-10-14' \
-  --data "{\"expectedVersion\":$PROPOSAL_VERSION}"
+```sh
+./gradlew test --no-daemon
+./gradlew postgresIntegrationTest --no-daemon
+./gradlew check bootJar --no-daemon
 ```
 
-An eligible assigned reviewer first reads proposal detail using their own token. The current identifiers are under `data.proposal`; set `PROPOSAL_VERSION`, `REVISION_ID`, and `ASSIGNMENT_ID` from that object before deciding. A blocked proposal has no active reviewer assignment and needs scoped HR recovery rather than approval.
+[PostgresFixture](src/test/java/id/mydev/peoplecore/support/PostgresFixture.java) defaults to `jdbc:postgresql://localhost:54339/peoplecore_tests` and creates an isolated schema. Tests explicitly invoke its Flyway runner and runtime-role provisioning helpers as needed; closing the fixture removes its schema and runtime role. Override `PEOPLECORE_TEST_DB_URL`, `PEOPLECORE_TEST_DB_USERNAME` and `PEOPLECORE_TEST_DB_PASSWORD` for an isolated test server; the fixture requires the database name `peoplecore_tests`.
 
-```bash
-curl --fail-with-body "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID" \
-  -H "Authorization: Bearer $REVIEWER_ACCESS_TOKEN"
-
-curl --fail-with-body -X POST "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID/approve" \
-  -H "Authorization: Bearer $REVIEWER_ACCESS_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: contact-phone-approve-2026-10-14' \
-  --data "{\"expectedVersion\":$PROPOSAL_VERSION,\"revisionId\":\"$REVISION_ID\",\"assignmentId\":\"$ASSIGNMENT_ID\"}"
-```
-
-For rejection or return, use the corresponding path and include a nonblank `reason` of at most 1,000 characters. After RETURNED, the owner edits with PATCH using `expectedVersion` and `changes`, then resubmits with a new key and the returned version. Both editing and resubmitting accept the complete desired proposal change list, not a partial merge with the previous revision.
-
-Read successive history pages with the token of a currently authorized owner or scoped HR account. Advance only the collection whose next page is needed; revision `page` is oldest-first, while decisions and evaluations are latest-first. Response arrays are under `data`, and counts/page positions are under `metadata`.
-
-```bash
-curl --fail-with-body \
-  "http://localhost:8080/api/v1/profile-proposals/$PROPOSAL_ID/history?page=0&size=100&decisionPage=0&evaluationPage=1&assignmentPage=0" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
-```
-
-For an HR contact correction, include the four expected counters using the JSON names in the API table. The service checks counters for the groups present in `changes`; untouched groups retain their values and counters. The owner contact-profile read returns `phoneVersion`, `emailVersion`, `addressVersion`, and `emergencyVersion`. There is no separate HR contact-profile GET route; do not construct one from the correction path.
-
-Rule publication uses `{"rules":[{"ruleId":"eng-contact","priority":10,"orgUnit":"ENG","jobLevel":null,"reviewerAccountId":"<designated-account-uuid>"}]}`. The example UUID placeholder must be replaced with a real eligible account. Publishing a scoped snapshot does not grant activation rights: changing the global pointer requires organization-wide HR. Preview never reserves a reviewer; submission records its actual result. Retry and reassignment append evidence and cannot overwrite the original submission route/content.
-
-Operation or owner-binding denial is 403. Proposal reads and HR decision/reassignment/retry commands return 404 for missing or out-of-scope resources before disclosing state/version. Stale versions/assignments, one-open conflicts, inactive reviewers, and same-field conflicts return 409. A touched-group conflict requires return, owner confirmation and fresh resubmission; there is no force-approval path. SYSTEM_ADMIN, manager and Finance roles alone grant no profile review/disclosure authority.
-
-## Attendance API
-
-All paths below are under `/api/v1`. Mutations require a verified JWT and `Idempotency-Key`.
-
-| Method | Path | Request / purpose |
-| --- | --- | --- |
-| POST | `/attendance/schedule-revisions` | `timezone?`, `days` (`weekday` 1–7, `startTime`, `endTime`, `overnightOffset` 0–1); organization-wide HR publish, 201 |
-| POST | `/attendance/calendar-revisions` | `location`, `holidays` (`holidayDay`, `holidayName`); HR publish, 201 |
-| GET | `/attendance/schedule-revisions`, `/attendance/calendar-revisions` | Published catalog with `page`/`size` (maximum 100) |
-| GET | `/attendance/schedule-revisions/{id}`, `/attendance/calendar-revisions/{id}` | Published configuration detail |
-| POST | `/attendance/publish-preview` | `scheduleRevisionId`/`calendarRevisionId`, `fromDate`, `toDate`, `employeeIds` (maximum 500), `supersedesId?`, `fingerprint?`; returns affected employees/dates and a context fingerprint |
-| POST | `/employees/{employeeId}/schedule-assignments`, `/employees/{employeeId}/calendar-assignments` | `revisionId`, `fromDate`, `toDate?`, `supersedesId?`, `backdateReason?`, `expectedFingerprint`; 201 |
-| GET | `/employees/{employeeId}/work-context` | `from`, `to` (at most 366 days); half-open occurrence view that does not pin evidence |
-| POST | `/attendance/clock-actions` | `action` `IN` or `OUT`; server time only, self only |
-| POST | `/attendance/corrections` | `workDate`, `proposedIn`, `proposedOut?`, `reason`; owner draft |
-| GET | `/attendance/corrections`, `/attendance/corrections/{id}` | Scoped list/detail with status, version and `blockedReason` |
-| GET | `/attendance/corrections/{id}/history` | Bounded revision and decision history |
-| POST | `/attendance/corrections/{id}/{action}` | `expectedVersion`, `revisionId?`, `expectedEvidenceId?`, `reviewerId?`, `reason?`, `proposedIn?`, `proposedOut?`; actions `edit`, `discard`, `submit`, `resubmit`, `withdraw`, `approve`, `reject`, `return`, `reassign`, `retry-route` |
-| POST | `/approval/attendance-rule-sets` | `publicId?`, `rules` (`publicId`, `priority`, `orgUnit`, `designatedHrId?`); HR publish |
-| POST | `/approval/attendance-rule-sets/activate` | `ruleSetId`, `reason`; organization-wide HR |
-| GET | `/approval/attendance-rule-sets/route-preview` | `employeePublicId`; activated configuration, current reviewer account and blocked reason |
-
-IN actions are accepted from two hours before the scheduled start until two hours after it; OUT actions from the scheduled start until four hours after the scheduled end. Boundaries are inclusive. A repeated action inside the inclusive 60-second window is treated as the same action even with a different idempotency key or device, and an occurrence keeps one IN/OUT pair. Employment must cover the work date, corrections close seven days after it, and existing evidence cannot be removed. A correction whose baseline no longer matches the current effective evidence reports `EVIDENCE_CHANGED` instead of overwriting it.
-
-## Leave API
-
-Paths are under `/api/v1`. Quantities are integer half units; a full day is two units.
-
-| Method | Path | Request / purpose |
-| --- | --- | --- |
-| POST | `/leave/entitlements/opening` | `employeePublicId`, `year`, `halfUnits`, `businessReference`, `source`, `reason`; one opening per employee/year |
-| POST | `/leave/entitlements/adjustments` | Same body with signed `halfUnits`; may not underfund reserved or consumed capacity |
-| GET | `/leave/entitlements?employeePublicId&year` | `granted`, `adjusted`, `consumed`, `reserved`, `available` |
-| GET | `/leave/entitlements/ledger?employeePublicId&year&afterEntryId?` | Append-only ledger with bounded continuation |
-| POST | `/leave/requests` | `employeePublicId`, `fromDate`, `toDate`, `portion` (`FULL`, `FIRST_HALF`, `SECOND_HALF`), `reason`; owner draft |
-| POST | `/leave/requests/{id}/edit` | `expectedVersion` query parameter plus the draft body |
-| POST | `/leave/requests/{id}/{action}` | `employeePublicId`, `expectedVersion`, `reason?`, `reviewerAccountPublicId?`, `step?`, `fallback?`; actions `submit`, `resubmit`, `discard`, `withdraw`, `approve`, `reject`, `return`, `reassign`, `retry-route` |
-| GET | `/leave/requests`, `/leave/requests/{id}` | Scoped queue (`employeePublicId`, `after?`, `limit`) and detail |
-| GET | `/leave/requests/{id}/history` | Bounded request timeline |
-| GET | `/leave/requests/{id}/portions` | Captured work portions for one request |
-| POST | `/leave/requests/{id}/cancellations` | Whole-cancellation request with `employeePublicId`, `expectedVersion`, `reason` |
-| POST | `/leave/requests/{id}/cancellations/{cancellationId}/{action}` | Same action body; actions `withdraw`, `approve`, `reject`, `reassign`, `retry-route` |
-| GET | `/leave/requests/{id}/cancellations/{cancellationId}`, `/history` | Cancellation detail and bounded timeline |
-| POST | `/approval/leave-rule-sets`, `/approval/leave-rule-sets/activate` | `rules` (`ruleId`, `priority`, `orgUnit`, designated manager/HR/cancellation accounts); separate publication and activation |
-| GET | `/approval/leave-rule-sets/route-preview` | `employeePublicId`; advisory route with blocked reason |
-| GET | `/leave/portions` | `employeePublicId`, `from`, `to`, `after?`, `limit`; final approved and cancelled portions only, without private notes |
-
-Requests cover one calendar year: either a `FULL` range of scheduled non-holiday dates or a single `FIRST_HALF`/`SECOND_HALF` date, submitted before the first occurrence starts. Submission reserves available capacity and captures canonical work context; blocked pending routes still hold the reservation. Approval advances manager then designated HR, and only the final HR step consumes the reservation. Return, rejection and withdrawal release only their own effects, and resubmission restarts both steps with fresh organization context. Cancellation is whole: pending, rejected or withdrawn cancellations keep the original consumption, and an approved one reverses it exactly once.
-
-## Private documents
-
-Document routes are enabled with `peoplecore.documents.enabled=true`. Creation, upload URL reservation, and finalization additionally require a configured verification scheduler; otherwise they return `503`. Storage requires endpoint, bucket, region, API timeout and attempt timeout under `peoplecore.documents.storage`. Verification requires `lease`, `poll-interval`, and `retry-delay` under `peoplecore.documents.verification`, plus storage, format verification, scanner, and independently supplied scanner-readiness dependencies.
-
-| Method | Path | Request / purpose |
-| --- | --- | --- |
-| POST | `/api/v1/documents/uploads` | `employeeId`, `purpose`, `fileName`, `mediaType`, `byteSize`; creates metadata, 201 |
-| POST | `/api/v1/documents/{id}/upload-url` | No JSON body; reserves a staging upload and returns a temporary upload URL with `no-store` |
-| POST | `/api/v1/documents/{id}/finalize` | No JSON body; validates the uploaded object and queues verification |
-| GET | `/api/v1/documents/{id}` | Authorized metadata/status, `no-store` |
-| GET | `/api/v1/documents/{id}/content` | Streams the owner's verified claim evidence |
-| GET, POST | `/api/v1/documents/{id}/holds` | Reads holds or creates a scoped-HR legal hold with `reason` |
-| GET | `/api/v1/documents/{id}/holds/{holdId}` | Reads a specific hold |
-| POST | `/api/v1/documents/{id}/holds/{holdId}/release` | Releases a hold with `reason` |
-| GET, POST | `/api/v1/documents/{id}/deletion` | Reads deletion state or claims deletion |
-| POST | `/api/v1/documents/{id}/deletion/restore` | Restores a claim before its deadline and logical deletion |
-
-Purposes are `CLAIM_EVIDENCE` and `PAYSLIP`. The maximum declared size is 10 MiB; accepted content is PDF, with JPEG/PNG also accepted for claim evidence. Direct presigned uploads go to staging; provider-side limits and staging-object lifecycle remain necessary because the API does not proxy that upload body. Finalization does not itself mark bytes verified. Each copy attempt has a unique candidate key; verification commits only for the current valid lease and checked candidate bytes.
-
-Create claim-evidence metadata using a real employee UUID:
-
-```bash
-curl --fail-with-body -X POST http://localhost:8080/api/v1/documents/uploads \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: receipt-upload-1' \
-  --data "{\"employeeId\":\"$EMPLOYEE_ID\",\"purpose\":\"CLAIM_EVIDENCE\",\"fileName\":\"receipt.pdf\",\"mediaType\":\"application/pdf\",\"byteSize\":1234}"
-```
-
-Reserve an upload URL using the returned document UUID, PUT the matching bytes to that URL, then finalize with a distinct idempotency key. Poll metadata for verification status; do not use an upload acknowledgement as proof of verified content.
-
-Deletion endpoints and the scheduler additionally require `peoplecore.documents.deletion.enabled=true`. Claims immediately block reads and new references. Active legal holds, sealed reimbursement evidence, and reviewed/published payslip references prevent deletion. The restore window defaults to `PT720H` through `peoplecore.documents.deletion.restore-window`.
-
-The purge worker atomically commits logical deletion and its audit before storage I/O. V27 tracks physical cleanup separately using `objects_purged_at`: a deleted row without that timestamp remains pending across crashes or storage failures. Before deleting any candidate, the worker requires every started copy to have recorded completion. Copy start locks the parent before the attempt and cannot begin after deletion is claimed. Lease expiry or abandonment does not establish that an external write stopped; uncertain copies remain pending for provider reconciliation. Such deleted rows are excluded before the polling batch limit and become eligible automatically after completion is recorded. Successful deletion of every candidate permits a separately committed conditional acknowledgement; retries repeat idempotent deletes without duplicating the logical-deletion audit. This does not replace provider staging cleanup or backup/restore reconciliation.
-
-Content streaming requires `peoplecore.documents.transfer.enabled=true` with `max-concurrent`, `poll-interval`, and `check-timeout` under that prefix. Access is checked again during transfer; the deployment must establish its actual transport cancellation and buffered-byte bounds. Scanner definition authenticity/freshness, readiness evidence, and scanner restart/reload behavior must be established for the deployed scanner. Local doubles do not establish these properties.
-
-## Reimbursement and payslips
-
-Reimbursement endpoints require `peoplecore.reimbursement.enabled=true`. Routes below are under `/api/v1/reimbursement`; mutations require a verified JWT and `Idempotency-Key`.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET, POST | `/categories` | Reads applicable categories using required `date` and optional `limit`/`cursor`, or publishes an effective-dated category |
-| POST | `/claims` | Creates an owner draft |
-| PATCH | `/claims/{id}` | Edits a draft using its expected version |
-| POST | `/claims/{id}/{action}` | Executes a permitted workflow action |
-| GET | `/claims`, `/claims/{id}`, `/claims/{id}/history` | Scoped queue, detail, and bounded history; list/history accept `limit`/`cursor` |
-| GET | `/claims/{id}/evidence/{documentId}/content` | Streams sealed evidence through current claim-read authorization |
-
-Submission captures a new immutable content, verified-evidence, category, organization, and route snapshot. Manager and Finance steps require distinct eligible nonself reviewers. Decisions recheck current authority, assignment, and expected version; return/resubmit creates fresh review context. Payment recording and correction append history without invoking an external payment provider.
-
-Payslip endpoints require `peoplecore.payslip.enabled=true`:
-
-| Method | Path | Request / purpose |
-| --- | --- | --- |
-| POST | `/api/v1/payslips/batches` | `items` containing `employeePublicId`, `period` (`YYYY-MM`), and `documentPublicId` |
-| PATCH | `/api/v1/payslips/batches/{id}` | `expectedRevision`, `draft` |
-| POST | `/api/v1/payslips/batches/{id}/review` | `expectedRevision`; seals the verified document-version mapping |
-| POST | `/api/v1/payslips/batches/{id}/publish` | `expectedRevision`; publishes only the current reviewed revision |
-| GET | `/api/v1/payslips/batches/{id}` | Authorized batch detail |
-| GET | `/api/v1/payslips` | Owner current publications, with `limit`/`cursor` |
-| GET | `/api/v1/payslips/{publicationId}/content` | Owner current publication content; additionally requires `peoplecore.payslip.download.enabled=true` |
-
-Publication serializes competing employee/period updates. History remains immutable while one current pointer selects the active publication. Publication, command receipt, audit, and outbox intent commit together; a failed replacement preserves the previously current version. Receipt replay cannot republish or duplicate notification intent. Outbox persistence does not itself deliver a notification.
-
-## Persistence conventions
-
-Application services coordinate validation, authorization, lifecycle changes, and transaction boundaries. Typed repository contracts isolate SQL and row mapping in infrastructure persistence adapters; JDBC types do not appear in application code or repository time values. Shared command admission uses a lock repository adapter. Transactions spanning multiple repositories remain coordinated by the application operation, preserving rollback and lock order.
-
-Use imports for annotations and class references. Fully qualified names inside JPQL constructor expressions remain query text. `PersistenceConventionTest` checks imported names, application/command JDBC boundaries, and repository dependency direction.
-
-## Command and operational boundaries
-
-Command identity is scoped by actor, command type, and idempotency key. Equivalent canonical payloads replay a successful result after current authorization is rechecked; changing the payload under the same identity returns `409`. Domain mutations, receipts, audit records, and outbox records share a transaction. Activation admission and rejection audit use the separate transactions described above. Receipts carry a seven-day retention deadline.
-
-Outbox persistence records pending events; no implemented dispatcher publishes them or delivers invitations to an external provider. Initial accounts and privileged roles require controlled database provisioning. The provisioning script issues the identity, organization, profile, attendance, leave, document, reimbursement and payslip grants explicitly, revokes stale table and sequence privileges before re-granting, and keeps audit access at `SELECT, INSERT`; rerun it after migrations, including when upgrading a role provisioned by an earlier script.
-
-Upgrade migrations remove legacy plaintext invitation secrets from command receipts and fail closed for unusable replay payloads. Potential exposure revokes outstanding invitations. SQL cleanup does not erase historical backups or WAL: restricted retention and isolated, migrated restores remain operator responsibilities. Interval-order migration rejects invalid existing assignments rather than rewriting their history.
-
-Local PostgreSQL, SQS-compatible messaging, and Keycloak use ports `54329`, `4566`, and `8081`. Setup, configuration, provisioning, and isolated PostgreSQL test requirements are in [README.md](README.md). Module ownership and transaction design are in [architecture.md](architecture.md).
-
-## Runtime and verification
-
-The verification path is:
-
-```bash
-./gradlew check bootJar --no-daemon --console=plain
-```
-
-`check` runs the configured unit, PostgreSQL integration, architecture-convention, and coverage checks. PostgreSQL checks require the isolated database setup described in [README.md](README.md); do not point them at a shared database. Generate the runnable artifact with `bootJar`. Passing local checks does not configure remote branch protection, external notification delivery, scanner trust, transport bounds, or recovery procedures.
-
-### Provisioning and defensive-path coverage
-
-`RuntimeProvisioningPostgresTest` creates a role that already holds stale UPDATE/DELETE/TRUNCATE privileges, executes the provisioning script against an isolated schema, and asserts the stale privileges are gone and only the intended grants remain, including read access to identity and activation tables. `pendingCorrectionReportsEvidenceChangedWhenPinnedEvidenceAppears` covers the stale-evidence listing. Its missing-pinned-occurrence companion is unreachable by schema invariant: `attendance_correction_revision.occurrence_id` references `attendance_occurrence(id)` without cascade, and the occurrence trigger rejects update, delete and truncate.
+Focused behavior coverage is implemented in [NotificationAcceptanceTest](src/test/java/id/mydev/peoplecore/notification/application/NotificationAcceptanceTest.java), [NotificationContextPostgresTest](src/test/java/id/mydev/peoplecore/notification/application/NotificationContextPostgresTest.java), [InvitationAcceptancePostgresTest](src/test/java/id/mydev/peoplecore/notification/infrastructure/persistence/InvitationAcceptancePostgresTest.java), [PayslipBatchAuditScopePostgresTest](src/test/java/id/mydev/peoplecore/payslip/PayslipBatchAuditScopePostgresTest.java), [ScopedReportsPostgresTest](src/test/java/id/mydev/peoplecore/reporting/ScopedReportsPostgresTest.java) and [ReportExportAuthorizationPostgresTest](src/test/java/id/mydev/peoplecore/reportexport/application/ReportExportAuthorizationPostgresTest.java). These cover persisted acceptance states, stale evidence, reconciliation, local worker delivery and intended-identity activation through an in-process email-provider fixture, complete batch scope, report snapshots and export revocation boundaries. The local provider fixture does not send email or establish live-provider behavior.

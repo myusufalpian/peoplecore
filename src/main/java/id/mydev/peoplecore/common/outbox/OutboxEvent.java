@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
+import org.slf4j.MDC;
 
 @Entity
 @Table(name = "outbox_events")
@@ -18,7 +19,9 @@ public class OutboxEvent {
     public enum Status {
         PENDING,
         PUBLISHED,
-        FAILED
+        FAILED,
+        IGNORED,
+        QUARANTINED
     }
 
     @Id
@@ -27,6 +30,9 @@ public class OutboxEvent {
 
     @Column(name = "event_id", nullable = false, unique = true)
     private UUID eventId;
+
+    @Column(name = "correlation_id", nullable = false, length = 128)
+    private String correlationId;
 
     @Column(name = "event_type", nullable = false, length = 128)
     private String eventType;
@@ -75,6 +81,8 @@ public class OutboxEvent {
         Instant createdAt
     ) {
         this.eventId = Objects.requireNonNull(eventId, "eventId must not be null");
+        String requestId=MDC.get("requestId");
+        this.correlationId=requestId!=null && requestId.matches("[A-Za-z0-9_-]{1,128}") ? requestId : eventId.toString();
         this.eventType = Objects.requireNonNull(eventType, "eventType must not be null");
         this.schemaVersion = schemaVersion;
         this.aggregateType = Objects.requireNonNull(aggregateType, "aggregateType must not be null");
@@ -105,6 +113,10 @@ public class OutboxEvent {
 
     public UUID getEventId() {
         return eventId;
+    }
+
+    public String getCorrelationId() {
+        return correlationId;
     }
 
     public String getEventType() {

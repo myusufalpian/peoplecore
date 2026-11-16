@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.UUID;
+import org.slf4j.MDC;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -11,6 +12,21 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OutboxEventTest {
+
+    @Test
+    void requestCorrelationSurvivesTheTransactionWithoutCapturingArbitraryDiagnosticContent() {
+        UUID eventId=UUID.randomUUID();
+        try {
+            MDC.put("requestId","request-123");
+            var correlated=new OutboxEvent(eventId,"PAYSLIP_PUBLISHED",1,"PAYSLIP_PUBLICATION",null,UUID.randomUUID(),"{}",Instant.now());
+            assertEquals("request-123",correlated.getCorrelationId());
+            MDC.put("requestId","unsafe@example.test");
+            var fallback=new OutboxEvent(eventId,"PAYSLIP_PUBLISHED",1,"PAYSLIP_PUBLICATION",null,UUID.randomUUID(),"{}",Instant.now());
+            assertEquals(eventId.toString(),fallback.getCorrelationId());
+        } finally {
+            MDC.remove("requestId");
+        }
+    }
 
     @Test
     void createsOutboxEventWithValidFields() {

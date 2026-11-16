@@ -6,6 +6,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -20,6 +23,30 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RevocableDocumentTransferTest {
+    @Test
+    void scheduledDeadlineAbortsAStalledTransferBeforeTheNormalPollingInterval() throws Exception {
+        BlockingSource source = new BlockingSource();
+        try (var transfer = new RevocableDocumentTransfer(1, Duration.ofSeconds(30), Duration.ofSeconds(1));
+             ExecutorService runner = Executors.newSingleThreadExecutor()) {
+            Future<?> running = runner.submit(() -> assertThrows(IOException.class,
+                () -> transfer.transfer(source, new ByteArrayOutputStream(), 1, () -> true,
+                    Instant.now().plusMillis(200), Clock.systemUTC())));
+            assertTrue(source.readStarted.await(2, TimeUnit.SECONDS));
+            assertTrue(source.closed.await(2, TimeUnit.SECONDS));
+            running.get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void alreadyExpiredScheduledDeadlineDeniesTheFirstByte() {
+        Instant now = Instant.parse("2026-11-13T10:00:00Z");
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (var transfer = new RevocableDocumentTransfer(1, Duration.ofSeconds(1), Duration.ofSeconds(1))) {
+            assertThrows(IOException.class, () -> transfer.transfer(new ByteArrayInputStream(new byte[] {1}), output, 1,
+                () -> true, now, Clock.fixed(now, ZoneOffset.UTC)));
+            assertArrayEquals(new byte[0], output.toByteArray());
+        }
+    }
     @Test
     void closingTransferServiceAbortsAnActiveTransfer() throws Exception {
         BlockingSource source = new BlockingSource();

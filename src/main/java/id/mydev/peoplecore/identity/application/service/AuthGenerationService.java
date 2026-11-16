@@ -15,17 +15,14 @@ public class AuthGenerationService {
 
     @Transactional(readOnly = true)
     public long current() {
-        return repository.findById(AuthGeneration.SINGLETON_ID)
-            .map(AuthGeneration::getGeneration)
-            .orElse(0L);
+        return repository.currentValue().orElse(0L);
     }
 
     @Transactional
     public long increment() {
-        AuthGeneration generation = repository.lockSingleton()
-            .orElseGet(() -> new AuthGeneration(AuthGeneration.SINGLETON_ID, 0L));
-        long next = generation.next();
-        repository.save(generation);
-        return next;
+        if (repository.advance() == 0) {
+            repository.saveAndFlush(new AuthGeneration(AuthGeneration.SINGLETON_ID, 1L));
+        }
+        return repository.currentValue().orElseThrow(() -> new IllegalStateException("Authorization generation unavailable"));
     }
 }

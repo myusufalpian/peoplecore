@@ -53,6 +53,9 @@ dependencies {
 	implementation 'org.flywaydb:flyway-database-postgresql'
 	implementation platform('software.amazon.awssdk:bom:2.42.33')
 	implementation 'software.amazon.awssdk:s3'
+	implementation 'software.amazon.awssdk:sqs'
+	implementation 'software.amazon.awssdk:sesv2'
+	implementation 'software.amazon.awssdk:kms'
 	documentParserRuntime "org.apache.pdfbox:pdfbox:${documentParserPdfBoxVersion}"
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	runtimeOnly 'org.postgresql:postgresql'
@@ -119,6 +122,7 @@ tasks.named('test') {
 	systemProperty 'peoplecore.document.parser.test-jar', tasks.named('documentParserJar').flatMap { it.archiveFile }.get().asFile.absolutePath
 	useJUnitPlatform { excludeTags 'postgres' }
 	inputs.property('localR2S3Endpoint', providers.environmentVariable('PEOPLECORE_R2_LOCAL_S3_ENDPOINT').orElse(''))
+	inputs.property('localSqsEndpoint', providers.environmentVariable('PEOPLECORE_SQS_TEST_ENDPOINT').orElse(''))
 	finalizedBy tasks.named('jacocoTestReport')
 	jacoco {
 		destinationFile = jacocoTestExecutionData.get().asFile

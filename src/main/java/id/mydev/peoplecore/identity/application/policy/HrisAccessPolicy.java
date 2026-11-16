@@ -13,12 +13,14 @@ import id.mydev.peoplecore.identity.domain.model.HrisRole;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
 import id.mydev.peoplecore.leave.application.service.LeaveWorkflowService;
 import id.mydev.peoplecore.payslip.application.PayslipService;
+import id.mydev.peoplecore.reportexport.application.ReportExportCommands;
 import id.mydev.peoplecore.reimbursement.application.service.ReimbursementWorkflowService;
 import id.mydev.peoplecore.approval.application.service.ApprovalRuleService;
 import id.mydev.peoplecore.organization.application.service.EmployeeService;
 import id.mydev.peoplecore.organization.application.service.ProfileProposalService;
 import id.mydev.peoplecore.organization.application.service.ProfileProposalService.ReplaySnapshot;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -143,6 +145,12 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
     private final ObjectProvider<DocumentHoldCommands> documentHolds;
     private final ObjectProvider<DocumentDeletionCommands> documentDeletions;
     private final ObjectProvider<DocumentCommands> documents;
+    private ObjectProvider<ReportExportCommands> reportExports;
+
+    @Autowired
+    public void reportExports(ObjectProvider<ReportExportCommands> reportExports) {
+        this.reportExports = reportExports;
+    }
 
     public HrisAccessPolicy(AccountAccessService access, EmployeeService employees,
                             EnrollmentService enrollments, ProfileProposalService proposals,
@@ -172,6 +180,10 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
 
     @Override
     public void checkCommand(Authentication caller, CommandContext command) {
+        if (ReportExportCommands.CREATE.equals(command.commandType())) {
+            reportExports.getObject().verifyCommand(mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
         if (COMMAND_ACTIVATE.equals(command.commandType())) {
             return;
         }
@@ -266,6 +278,10 @@ public class HrisAccessPolicy implements CurrentAccessPolicy {
     @Override
     public void checkReplay(Authentication caller, CommandContext command, String recordedResult) {
         checkCommand(caller, command);
+        if (ReportExportCommands.CREATE.equals(command.commandType())) {
+            reportExports.getObject().verifyReplay(mapper.readTree(command.requestPayload()), caller);
+            return;
+        }
         if (ATTENDANCE_COMMANDS.contains(command.commandType())) {
             attendanceCommands.getObject().verifyReplay(command.commandType(), mapper.readTree(command.requestPayload()), recordedResult, caller);
             return;
