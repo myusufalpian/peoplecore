@@ -3,6 +3,8 @@ package id.mydev.peoplecore.payslip.application;
 import id.mydev.peoplecore.common.api.ResourceNotFoundException;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.common.outbox.OutboxEvent;
+import id.mydev.peoplecore.common.outbox.OutboxEventObserver;
+import org.springframework.beans.factory.annotation.Autowired;
 import id.mydev.peoplecore.common.outbox.OutboxEventRepository;
 import id.mydev.peoplecore.document.application.service.VerifiedDocumentAccess;
 import id.mydev.peoplecore.document.domain.model.Purpose;
@@ -56,6 +58,12 @@ public class PayslipService {
     private final EntityManager entities;
     private final AdmissionGuard admission;
     private final OutboxEventRepository outbox;
+    private List<OutboxEventObserver> outboxObservers = List.of();
+
+    @Autowired(required = false)
+    void configureOutboxObservers(List<OutboxEventObserver> observers) {
+        outboxObservers = List.copyOf(observers);
+    }
 
     public PayslipService(PayslipRepository payslips, EmployeeService employees, AccountAccessService access,
                           VerifiedDocumentAccess documents, Clock clock, ObjectMapper mapper, EntityManager entities,
@@ -153,10 +161,15 @@ public class PayslipService {
             long publication = payslips.insertPublication(publicationPublicId, current.revisionId(), item.id(),
                 item.employeeId(), item.period(), actor.getId());
             payslips.upsertCurrent(item.employeeId(), item.period(), publication);
-            outbox.save(new OutboxEvent(UUID.randomUUID(), PAYSLIP_PUBLISHED_EVENT, EVENT_SCHEMA_VERSION,
+            OutboxEvent event = new OutboxEvent(UUID.randomUUID(), PAYSLIP_PUBLISHED_EVENT, EVENT_SCHEMA_VERSION,
                 PAYSLIP_PUBLICATION_AGGREGATE, publication, publicationPublicId,
                 mapper.writeValueAsString(new PublicationIntent(item.employeePublicId().toString(),
-                    item.period().toString())), Instant.now(clock)));
+                    item.period().toString())), Instant.now(clock));
+            outbox.save(event);
+            if (!outboxObservers.isEmpty()) {
+                entities.flush();
+                outboxObservers.forEach(observer -> observer.created(event));
+            }
         }
         payslips.markPublished(current.batchId());
         authorize(caller, current.items());

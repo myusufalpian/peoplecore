@@ -7,6 +7,9 @@ import jakarta.persistence.EntityManager;
 import org.springframework.security.access.AccessDeniedException;
 import id.mydev.peoplecore.common.audit.AuditEventWriter;
 import id.mydev.peoplecore.common.outbox.OutboxEvent;
+import id.mydev.peoplecore.common.outbox.OutboxEventObserver;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.util.List;
 import id.mydev.peoplecore.common.outbox.OutboxEventRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +40,12 @@ public class CommandExecutionService {
     private final CurrentAccessPolicy accessPolicy;
     private final AdmissionGuard admissionGuard;
     private final EntityManager entities;
+    private List<OutboxEventObserver> outboxObservers = List.of();
+
+    @Autowired(required = false)
+    void configureOutboxObservers(List<OutboxEventObserver> observers) {
+        outboxObservers = List.copyOf(observers);
+    }
 
     public CommandExecutionService(
         CommandReceiptRepository commandReceiptRepository,
@@ -200,6 +209,10 @@ public class CommandExecutionService {
                 now
             );
             outboxEventRepository.save(outboxEvent);
+            if (!outboxObservers.isEmpty()) {
+                entities.flush();
+                outboxObservers.forEach(observer -> observer.created(outboxEvent));
+            }
         }
 
         return result;

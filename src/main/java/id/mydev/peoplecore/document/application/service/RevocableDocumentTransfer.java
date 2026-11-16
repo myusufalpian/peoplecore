@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,6 +53,11 @@ public final class RevocableDocumentTransfer implements AutoCloseable {
     }
 
     public void transfer(InputStream source, OutputStream destination, long byteSize, AccessCheck check) throws IOException {
+        transfer(source, destination, byteSize, check, null, Clock.systemUTC());
+    }
+
+    public void transfer(InputStream source, OutputStream destination, long byteSize, AccessCheck check,
+                         Instant deadline, Clock clock) throws IOException {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(destination, "destination");
         Objects.requireNonNull(check, "check");
@@ -63,7 +70,13 @@ public final class RevocableDocumentTransfer implements AutoCloseable {
         Transfer transfer = new Transfer(source, destination);
         transfers.add(transfer);
         ScheduledFuture<?> watcher = null;
+        ScheduledFuture<?> cutoff = null;
         try {
+            if (deadline != null) {
+                long remaining = Duration.between(Objects.requireNonNull(clock, "clock").instant(), deadline).toMillis();
+                if (remaining <= 0) throw new IOException("Document transfer validity ended");
+                cutoff = watchers.schedule(transfer::abort, remaining, TimeUnit.MILLISECONDS);
+            }
             requireAccess(transfer, check);
             watcher = watchers.scheduleWithFixedDelay(() -> watch(transfer, check),
                 pollInterval.toMillis(), pollInterval.toMillis(), TimeUnit.MILLISECONDS);
@@ -81,6 +94,9 @@ public final class RevocableDocumentTransfer implements AutoCloseable {
         } finally {
             if (watcher != null) {
                 watcher.cancel(true);
+            }
+            if (cutoff != null) {
+                cutoff.cancel(true);
             }
             transfers.remove(transfer);
             permits.release();

@@ -2,7 +2,6 @@ package id.mydev.peoplecore.approval.application.admission;
 
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.approval.domain.repository.ProfileAdmissionLockRepository;
-import id.mydev.peoplecore.common.command.CommandBusyException;
 import id.mydev.peoplecore.common.command.CommandExecutionService;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +19,7 @@ public class ProfileAdmissionGuard implements AdmissionGuard {
     private static final String DOMAIN_LOCK_TIMEOUT = "2s";
 
     private static final Set<String> SHARED_COMMANDS = Set.of(
+        "REPORT_EXPORT_CREATE",
         "PROFILE_CREATE",
         "PROFILE_EDIT",
         "PROFILE_SUBMIT",

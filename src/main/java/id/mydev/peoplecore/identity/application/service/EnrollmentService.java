@@ -9,7 +9,8 @@ import id.mydev.peoplecore.identity.application.command.EnrollmentResults.Rehire
 import id.mydev.peoplecore.identity.application.command.EnrollmentResults.RestoreResult;
 import id.mydev.peoplecore.identity.application.mapper.JwtIdentityMapper;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService.HrAuthority;
-import id.mydev.peoplecore.identity.domain.exception.BindingConflictException;import id.mydev.peoplecore.identity.domain.exception.InvalidRoleException;
+import id.mydev.peoplecore.identity.domain.exception.BindingConflictException;
+import id.mydev.peoplecore.identity.domain.exception.InvalidRoleException;
 import id.mydev.peoplecore.identity.domain.exception.InvitationConflictException;
 import id.mydev.peoplecore.identity.domain.exception.InvitationExpiredException;
 import id.mydev.peoplecore.identity.domain.exception.LifecycleConflictException;
@@ -29,6 +30,7 @@ import jakarta.persistence.EntityManager;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -44,6 +46,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -70,6 +73,12 @@ public class EnrollmentService {
     private final EntityManager entities;
     private final Clock clock;
     private final SecureRandom random = new SecureRandom();
+    private Optional<InvitationDeliveryService> invitationDelivery = Optional.empty();
+
+    @Autowired(required = false)
+    void configureInvitationDelivery(InvitationDeliveryService service) {
+        invitationDelivery = Optional.of(service);
+    }
 
     public EnrollmentService(
         EnrollmentInvitationRepository invitations,
@@ -124,6 +133,10 @@ public class EnrollmentService {
             expectedIssuer.trim(), expectedSubject.trim(), sha256Hex(secret),
             now.plus(timeToLive == null ? DEFAULT_INVITATION_TTL : timeToLive), now);
         invitations.save(invitation);
+        invitationDelivery.ifPresent(service -> {
+            entities.flush();
+            service.store(invitationPublicId, employeePublicId, secret);
+        });
         generations.increment();
         return new IssuedInvitation(new InvitationResult(invitation.getPublicId(), employeePublicId,
             invitation.getIntendedIdentityRef(), invitation.getStatus(), invitation.getDeliveryStatus(),
@@ -188,6 +201,7 @@ public class EnrollmentService {
             throw new BindingConflictException("Concurrent binding already claimed this association");
         }
         invitation.consume(checked);
+        invitationDelivery.ifPresent(service -> service.wipe(invitationPublicId));
         invitations.save(invitation);
         employee.linkAccount(account.getId());
         grantRoleIfAbsent(account.getId(), HrisRole.EMPLOYEE, checked);
@@ -401,6 +415,7 @@ public class EnrollmentService {
         Instant revokedAt = Instant.now(clock);
         for (EnrollmentInvitation invitation : outstanding) {
             invitation.revoke(revokedAt);
+            invitationDelivery.ifPresent(service -> service.wipe(invitation.getPublicId()));
             invitations.save(invitation);
         }
     }

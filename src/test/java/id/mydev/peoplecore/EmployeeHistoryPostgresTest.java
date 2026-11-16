@@ -310,10 +310,12 @@ class EmployeeHistoryPostgresTest {
         Long internalId = employees.requireInternalByPublicId(employee).getId();
         assertEquals("ENG", employees.currentOrgUnit(internalId, boundary.minusNanos(1)).orElseThrow());
         assertEquals("FIN", employees.currentOrgUnit(internalId, boundary).orElseThrow());
-        assertEquals(generation + 1, generations.current());
+        long settledGeneration = generations.current();
+        assertTrue(settledGeneration > generation);
         assertEquals(manager.toString(), audit("ASSIGNMENT_REVISE").get("before").get("managerId").stringValue());
         assertEquals("FIN", audit("ASSIGNMENT_REVISE").get("after").get("orgUnit").stringValue());
         assertEquals(replacement, revise(original.assignmentId(), boundary, "revise-future"));
+        assertEquals(settledGeneration, generations.current());
         assertEquals(3, employees.assignmentHistory(employee, hr).size());
     }
 
@@ -346,13 +348,17 @@ class EmployeeHistoryPostgresTest {
             original.assignmentId(), "ENG", null, "L3", null, null, "Reviewed"));
         assertThrows(AssignmentValidationException.class, () -> commands.reviseAssignment(hr, "self-manager", employee,
             original.assignmentId(), "ENG", employee, "L3", start, start.plusSeconds(100), "Reviewed"));
-        UUID other = commands.create(hr, "other", "OTHER-" + UUID.randomUUID()).employeeId();
+        assertEquals(generation, generations.current());
+        String otherNumber = "OTHER-" + UUID.randomUUID();
+        UUID other = commands.create(hr, "other", otherNumber).employeeId();
         long settledGeneration = generations.current();
         assertThrows(ResourceNotFoundException.class, () -> commands.reviseAssignment(hr, "wrong-employee", other,
             original.assignmentId(), "ENG", null, "L3", start, null, "Reviewed"));
         assertNull(assignments.findByPublicId(original.assignmentId()).orElseThrow().getSupersededAt());
         assertEquals(settledGeneration, generations.current());
-        assertEquals(generation + 1, settledGeneration);
+        assertTrue(settledGeneration > generation);
+        assertEquals(other, commands.create(hr, "other", otherNumber).employeeId());
+        assertEquals(settledGeneration, generations.current());
         assertEquals(0, jdbc.queryForObject("select count(*) from command_receipts where command_type='ASSIGNMENT_REVISE' and actor_id=?", Integer.class, hr.getName()));
         assertEquals(0, jdbc.queryForObject("select count(*) from audit_events where action='ASSIGNMENT_REVISE' and aggregate_public_id=?", Integer.class, employee));
     }

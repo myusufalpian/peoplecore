@@ -12,6 +12,7 @@ jobs:
       PEOPLECORE_RUNTIME_DB_PASSWORD: ci-unused-runtime-password
       KEYCLOAK_ADMIN_USERNAME: ci-local-admin
       KEYCLOAK_ADMIN_PASSWORD: ci-local-admin-password
+      PEOPLECORE_SQS_TEST_ENDPOINT: http://127.0.0.1:4566
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -33,6 +34,21 @@ jobs:
           done
           docker logs peoplecore-ci-postgres
           exit 1
+      - name: Start SQS for transport integration checks
+        run: |
+          docker compose up -d sqs
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent -X POST http://127.0.0.1:4566/ \
+              -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data 'Action=GetQueueUrl&QueueName=peoplecore-notifications&Version=2012-11-05' >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs sqs
+          exit 1
+      - name: Verify invitation acceptance helper without external requests
+        run: node --test local/verify-invitation.test.mjs
       - run: ./gradlew check bootJar --no-daemon --console=plain
       - name: Verify local SQS and Keycloak contracts
         run: |
