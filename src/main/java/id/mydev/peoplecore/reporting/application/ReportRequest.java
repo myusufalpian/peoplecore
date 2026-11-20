@@ -1,10 +1,12 @@
 package id.mydev.peoplecore.reporting.application;
 
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.UUID;
 
-public record ReportRequest(ReportType reportType, int reportVersion, LocalDate from, LocalDate to,
+public record ReportRequest(@NotNull ReportType reportType, @Positive int reportVersion, LocalDate from, LocalDate to,
                             Integer year, YearMonth month, UUID employeeId, String unit, String status,
                             String workflowType, UUID resourceId, String actorId, String action,
                             String correlationId, String category) {

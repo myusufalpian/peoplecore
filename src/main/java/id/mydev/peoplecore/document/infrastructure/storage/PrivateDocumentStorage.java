@@ -6,6 +6,8 @@ import java.util.Objects;
 import java.util.UUID;
 import java.io.FilterInputStream;
 import java.io.InputStream;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
@@ -13,6 +15,7 @@ import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
@@ -88,6 +91,40 @@ public final class PrivateDocumentStorage {
                 response.abort();
             }
         };
+    }
+
+    public boolean verifyCandidate(UUID attemptId, long expectedSize, String expectedSha256) {
+        Objects.requireNonNull(attemptId, "attemptId");
+        Objects.requireNonNull(expectedSha256, "expectedSha256");
+        try {
+            HeadObjectResponse head = client.headObject(HeadObjectRequest.builder()
+                .bucket(bucket).key("candidates/" + attemptId).build());
+            if (head.contentLength() == null || head.contentLength() != expectedSize) {
+                return false;
+            }
+            try (InputStream stream = openCandidate(attemptId)) {
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                byte[] buffer = new byte[8192];
+                long total = 0;
+                int read;
+                while ((read = stream.read(buffer)) != -1) {
+                    total += read;
+                    if (total > expectedSize) {
+                        return false;
+                    }
+                    digest.update(buffer, 0, read);
+                }
+                String actualSha256 = HexFormat.of().formatHex(digest.digest());
+                return total == expectedSize && expectedSha256.equalsIgnoreCase(actualSha256);
+            }
+        } catch (S3Exception exception) {
+            if (exception.statusCode() == 404) {
+                return false;
+            }
+            throw exception;
+        } catch (Exception exception) {
+            return false;
+        }
     }
 
     public void deleteCandidate(UUID attemptId) {

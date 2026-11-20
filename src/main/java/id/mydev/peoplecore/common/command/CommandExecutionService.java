@@ -3,7 +3,9 @@ package id.mydev.peoplecore.common.command;
 import id.mydev.peoplecore.common.audit.AuditEvent;
 import id.mydev.peoplecore.common.security.CurrentAccessPolicy;
 import id.mydev.peoplecore.common.security.CurrentCaller;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import jakarta.persistence.EntityManager;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import id.mydev.peoplecore.common.audit.AuditEventWriter;
 import id.mydev.peoplecore.common.outbox.OutboxEvent;
@@ -41,10 +43,16 @@ public class CommandExecutionService {
     private final AdmissionGuard admissionGuard;
     private final EntityManager entities;
     private List<OutboxEventObserver> outboxObservers = List.of();
+    private ServiceRecoveryGate recoveryGate;
 
     @Autowired(required = false)
     void configureOutboxObservers(List<OutboxEventObserver> observers) {
         outboxObservers = List.copyOf(observers);
+    }
+
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
     }
 
     public CommandExecutionService(
@@ -141,6 +149,9 @@ public class CommandExecutionService {
                                   Function<T, AuditDescriptor> auditMapping,
                                   Function<T, OutboxDescriptor> outboxMapping) {
         Objects.requireNonNull(context, "context must not be null");
+        if (recoveryGate != null) {
+            recoveryGate.requireNormalOperation();
+        }
         var caller = CurrentCaller.require();
         if (!caller.getName().equals(context.actorId())) {
             throw new AccessDeniedException("Command actor does not match authenticated caller");

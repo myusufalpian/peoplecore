@@ -1,9 +1,12 @@
 package id.mydev.peoplecore.common.outbox;
 
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,6 +16,7 @@ public class EventIngestionService {
     private final TransportRepository repository;
     private final List<EventIngestionHandler> handlers;
     private final Clock clock;
+    private ServiceRecoveryGate recoveryGate;
 
     public EventIngestionService(TransportRepository repository, List<EventIngestionHandler> handlers, Clock clock) {
         this.repository = repository;
@@ -20,8 +24,16 @@ public class EventIngestionService {
         this.clock = clock;
     }
 
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
+    }
+
     @Transactional(timeout = 30)
     public void ingest(String consumer, EventEnvelope event) {
+        if (recoveryGate != null && recoveryGate.isIsolated()) {
+            throw new IllegalStateException("Recovery isolation blocks event ingestion");
+        }
         Instant now = clock.instant();
         String rejection = rejection(consumer, event, now);
         if (rejection != null) {

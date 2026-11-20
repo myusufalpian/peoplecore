@@ -20,7 +20,10 @@ public class JdbcVerifiedDocumentRepository implements VerifiedDocumentRepositor
                 + "FROM private_document d JOIN employees e ON e.id=d.employee_id "
                 + "JOIN document_version v ON v.id=d.current_version_id AND v.document_id=d.id "
                 + "WHERE d.public_id=? AND e.public_id=? AND d.purpose=? "
-                + "AND d.status='VERIFIED' AND d.deletion_state='LIVE' FOR UPDATE OF d",
+                + "AND d.status='VERIFIED' AND d.deletion_state='LIVE' "
+                + "AND NOT EXISTS (SELECT 1 FROM service_recovery_exception ex "
+                + "WHERE ex.resource_type='PRIVATE_DOCUMENT' AND ex.resource_public_id=d.public_id "
+                + "AND ex.status IN ('OPEN','ACCEPTED_RESTRICTION')) FOR UPDATE OF d",
             (row, index) -> new VerifiedVersion(row.getLong(1), row.getLong(2),
                 row.getObject(3, UUID.class), row.getObject(4, UUID.class)),
             documentPublicId, employeePublicId, purpose);

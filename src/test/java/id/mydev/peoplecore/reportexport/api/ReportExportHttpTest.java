@@ -63,6 +63,9 @@ class ReportExportHttpTest {
 
     @Test
     void invalidRequestAndMissingContentRetain400And404InsteadOfGeneric500() throws Exception {
+        http.perform(post("/api/v1/report-exports").principal(caller).header("Idempotency-Key","key")
+            .contentType(MediaType.APPLICATION_JSON).content("{\"format\":\"\",\"report\":null}"))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.key").value("VALIDATION_ERROR"));
         doThrow(new IllegalArgumentException("invalid filter" )).when(commands).create(any(),anyString(),any(Request.class));
         http.perform(post("/api/v1/report-exports").principal(caller).header("Idempotency-Key","key")
             .contentType(MediaType.APPLICATION_JSON).content(BODY))

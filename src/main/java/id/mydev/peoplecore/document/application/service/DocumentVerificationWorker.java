@@ -17,6 +17,9 @@ import org.slf4j.LoggerFactory;
 import id.mydev.peoplecore.document.domain.repository.DocumentVerificationRepository;
 import id.mydev.peoplecore.document.domain.repository.DocumentVerificationRepository.Attempt;
 import id.mydev.peoplecore.document.domain.repository.DocumentVerificationRepository.VerifiedContent;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -35,6 +38,7 @@ public final class DocumentVerificationWorker {
     private final ClamAvScanner scanner;
     private final DocumentFormatVerifier formatVerifier;
     private final long leaseSeconds;
+    private ServiceRecoveryGate recoveryGate;
 
     public DocumentVerificationWorker(DocumentVerificationRepository repository, PlatformTransactionManager manager,
                                       PrivateDocumentStorage storage, ClamAvScanner scanner,
@@ -51,7 +55,15 @@ public final class DocumentVerificationWorker {
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
+    }
+
     public boolean verifyNext() throws IOException {
+        if (recoveryGate != null && recoveryGate.isIsolated()) {
+            return false;
+        }
         if (!sourceLeases.tryAcquire()) {
             throw new IOException("Verification source capacity exhausted");
         }
@@ -149,6 +161,9 @@ public final class DocumentVerificationWorker {
         Objects.requireNonNull(retryDelay, "retryDelay");
         if (retryDelay.isNegative()) {
             throw new IllegalArgumentException("Retry delay must not be negative");
+        }
+        if (recoveryGate != null && recoveryGate.isIsolated()) {
+            return false;
         }
         Boolean recovered = transaction.execute(status -> repository.recover(retryDelay.toMillis()));
         return Boolean.TRUE.equals(recovered);

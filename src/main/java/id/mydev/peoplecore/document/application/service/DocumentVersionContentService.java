@@ -5,10 +5,12 @@ import id.mydev.peoplecore.document.domain.model.Purpose;
 import id.mydev.peoplecore.document.domain.repository.DocumentVersionContentRepository;
 import id.mydev.peoplecore.document.domain.repository.DocumentVersionContentRepository.MetadataRecord;
 import id.mydev.peoplecore.document.infrastructure.storage.PrivateDocumentStorage;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import java.io.InputStream;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -19,6 +21,7 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 public class DocumentVersionContentService {
     private final DocumentVersionContentRepository documents;
     private final ObjectProvider<PrivateDocumentStorage> storage;
+    private ServiceRecoveryGate recoveryGate;
 
     public DocumentVersionContentService(DocumentVersionContentRepository documents,
                                          ObjectProvider<PrivateDocumentStorage> storage) {
@@ -26,11 +29,19 @@ public class DocumentVersionContentService {
         this.storage = storage;
     }
 
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
+    }
+
     public Content open(UUID documentPublicId, UUID versionPublicId, UUID employeePublicId, Purpose purpose) {
         Objects.requireNonNull(documentPublicId, "documentPublicId");
         Objects.requireNonNull(versionPublicId, "versionPublicId");
         Objects.requireNonNull(employeePublicId, "employeePublicId");
         Objects.requireNonNull(purpose, "purpose");
+        if (recoveryGate != null) {
+            recoveryGate.requireNormalOperation();
+        }
         MetadataRecord metadata = documents.findMetadata(documentPublicId, versionPublicId, employeePublicId,
             purpose.name()).orElseThrow(ResourceNotFoundException::new);
         PrivateDocumentStorage configured = storage.getIfAvailable();
