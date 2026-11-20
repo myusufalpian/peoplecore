@@ -2,6 +2,7 @@ package id.mydev.peoplecore.notification.application;
 
 import id.mydev.peoplecore.identity.application.service.IdentityNotificationAccess;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import id.mydev.peoplecore.notification.domain.NotificationModels.Delivery;
 import id.mydev.peoplecore.notification.domain.NotificationModels.Intent;
 import id.mydev.peoplecore.notification.domain.NotificationModels.Message;
@@ -13,6 +14,8 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
@@ -29,6 +32,7 @@ public class NotificationTransactions {
     private final AdmissionGuard admission;
     private final String applicationUrl;
     private final NotificationAcceptance acceptance;
+    private ServiceRecoveryGate recoveryGate;
     public NotificationTransactions(NotificationRepository repository,IdentityNotificationAccess identity,
         List<NotificationResolver> resolvers,Clock clock,AdmissionGuard admission,NotificationAcceptance acceptance,@Value("${peoplecore.notifications.application-url:}") String applicationUrl) {
         URI url=URI.create(applicationUrl);
@@ -38,8 +42,15 @@ public class NotificationTransactions {
         this.acceptance=acceptance;
         this.applicationUrl=applicationUrl.replaceAll("/+$", "");
     }
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
+    }
     @Transactional(propagation=Propagation.REQUIRES_NEW)
     public Optional<Delivery> claim() {
+        if (recoveryGate != null && recoveryGate.isIsolated()) {
+            return Optional.empty();
+        }
         Instant now=clock.instant();
         identity.cleanup(); repository.expireLeases(now);
         if(!repository.reserve("send",now.truncatedTo(ChronoUnit.SECONDS),10)) return Optional.empty();

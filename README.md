@@ -111,7 +111,8 @@ These feature switches are opt-in; the checked-in application configuration does
 | `peoplecore.notifications.send.enabled` | SES sending when notifications are enabled; requires sender/configuration set, worker runtime and the independent alert worker |
 | `peoplecore.notifications.feedback.enabled` | Trusted SES feedback; the worker additionally needs events enabled, feedback queue/topic configuration and the independent alert worker |
 | `peoplecore.reports.enabled` | Scoped reports and audit search |
-| `peoplecore.exports.enabled` | CSV export API; generation/download require configured private export storage |
+| `peoplecore.exports.enabled` | CSV export API; generation requires configured private export storage |
+| `peoplecore.exports.download.enabled` | Streaming export downloads via `exportRevocableTransfer` when exports are enabled |
 | `peoplecore.exports.worker.enabled` | Export processing when exports are enabled and runtime role is worker |
 
 Storage-backed document operations use the configuration in [DocumentStorageConfig](src/main/java/id/mydev/peoplecore/document/infrastructure/storage/DocumentStorageConfig.java). Verification uses separately configured scanner, parser and timing settings. Authenticated content transfer repeatedly checks authorization. Deletion blocks reads immediately; physical cleanup remains retryable and does not treat an expired copy lease as proof that storage I/O stopped.
@@ -126,7 +127,7 @@ Reports support attendance, leave balances, request status, reimbursements, pays
 
 CSV exports use the same scoped query adapters, with a 50,000-row limit, 10 MiB artifact limit and 120-second generation budget. At most two unfinished jobs are allowed per requester. Finalization requires a snapshot no older than 15 minutes, and jobs expire 24 hours after creation. Download requires current requester authority, a matching authorization generation and an unexpired boundary; content is streamed through a revocable transfer rather than a public object URL. [ReportExportConfig](src/main/java/id/mydev/peoplecore/reportexport/infrastructure/config/ReportExportConfig.java) defines private storage and transfer wiring.
 
-`peoplecore.recovery.isolated=true` suspends normal event, replay, email and export processing, export cleanup and export download grants. Its default is false.
+`peoplecore.recovery.isolated=true` (or an active `ISOLATED`/`RECONCILING` database recovery incident in `service_recovery_incident`) suspends normal domain commands, event/replay/email/export processing, document verification/deletion schedulers, and document/payslip/export content download grants via `ServiceRecoveryGate`. `GET /api/v1/operations/health-summary` reports database job-age and pending counts across `outbox_events`, `notification_delivery`, `notification_attention_alert`, `report_export_job`, and `document_verification_attempt`, while `/api/v1/operations/recovery/incidents/*` manages post-restore identity/invitation reconciliation, storage checksum inventory, and three-role (`HR_ADMIN`, `FINANCE_PAYROLL`, `SYSTEM_ADMIN`) reopening sign-off.
 
 ## Build and verification
 

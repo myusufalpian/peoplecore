@@ -64,5 +64,9 @@ GRANT SELECT, INSERT ON report_export_job, report_export_candidate TO peoplecore
 GRANT UPDATE (status, data_as_of, authorization_generation, next_boundary, lease_generation, lease_until,
     candidate_id, byte_size, sha256, reason_code) ON report_export_job TO peoplecore_runtime;
 GRANT UPDATE (uploaded_at, byte_size, sha256, deleted_at, next_reconcile_at) ON report_export_candidate TO peoplecore_runtime;
+GRANT SELECT, INSERT ON service_recovery_incident, service_recovery_exception,
+    service_recovery_approval, service_recovery_operation TO peoplecore_runtime;
+GRANT UPDATE (status, reconciled_at, reopened_at, rto_seconds) ON service_recovery_incident TO peoplecore_runtime;
+GRANT UPDATE (status, resolved_by, resolution_reason, resolved_at) ON service_recovery_exception TO peoplecore_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO peoplecore_runtime;
 COMMIT;

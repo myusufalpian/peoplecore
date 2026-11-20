@@ -6,6 +6,7 @@ import id.mydev.peoplecore.common.audit.AuditEventWriter;
 import id.mydev.peoplecore.common.command.IdempotencyKeys;
 import id.mydev.peoplecore.common.command.AdmissionGuard;
 import id.mydev.peoplecore.common.security.OperationAccessService;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -15,6 +16,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import java.util.Objects;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
@@ -30,6 +33,7 @@ public class EventReplayService {
     private final Clock clock;
     private final Environment environment;
     private final AdmissionGuard admission;
+    private ServiceRecoveryGate recoveryGate;
 
     public EventReplayService(TransportRepository repository, OperationAccessService access, AuditEventWriter audit,
                                EventIngestionService ingestion, Clock clock, Environment environment, AdmissionGuard admission) {
@@ -40,6 +44,11 @@ public class EventReplayService {
         this.clock = clock;
         this.environment = environment;
         this.admission = admission;
+    }
+
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
     }
 
     @Transactional
@@ -84,7 +93,9 @@ public class EventReplayService {
     }
 
     private void requireEnabled() {
-        Assert.state(!environment.getProperty("peoplecore.recovery.isolated", Boolean.class, false), "Recovery isolation blocks replay");
+        boolean isolated = environment.getProperty("peoplecore.recovery.isolated", Boolean.class, false)
+            || (recoveryGate != null && recoveryGate.isIsolated());
+        Assert.state(!isolated, "Recovery isolation blocks replay");
         Assert.state(environment.getProperty("peoplecore.events.replay.enabled", Boolean.class, false), "Replay is disabled");
     }
 

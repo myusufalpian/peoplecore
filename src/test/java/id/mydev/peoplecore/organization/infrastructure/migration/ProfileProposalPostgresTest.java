@@ -152,7 +152,7 @@ class ProfileProposalPostgresTest {
             fixture.jdbc.update(
                 "update profile_rule_sets set status='PUBLISHED',published_at=now() where public_id=?::uuid",
                 setId);
-            assertEquals(23, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(24, fixture.flyway().migrate().migrationsExecuted);
             assertEquals(1, fixture.jdbc.queryForObject(
                 "select count(*) from profile_rules where rule_id='route-eng'", Integer.class));
             assertEquals(0, fixture.jdbc.queryForObject(
@@ -234,7 +234,7 @@ class ProfileProposalPostgresTest {
             fixture.jdbc.update(
                 "insert into profile_revision_change(revision_id,field_name,proposed_value,baseline_version) "
                     + "values(?,'personalPhone','+62 812 345 678',0)", revisionId);
-            assertEquals(22, fixture.flyway().migrate().migrationsExecuted);
+            assertEquals(23, fixture.flyway().migrate().migrationsExecuted);
             fixture.grantRuntime();
             var runtime = fixture.runtime();
             assertEquals(true, runtime.queryForObject(

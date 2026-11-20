@@ -7,6 +7,7 @@ import id.mydev.peoplecore.document.domain.repository.DocumentDeletionRepository
 import id.mydev.peoplecore.document.infrastructure.storage.PrivateDocumentStorage;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -15,6 +16,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -37,6 +39,7 @@ public class DocumentDeletionService {
     private final AccountAccessService access;
     private final Clock clock;
     private final Duration restoreWindow;
+    private ServiceRecoveryGate recoveryGate;
 
     public DocumentDeletionService(DocumentDeletionRepository documents, DocumentPurgeWorker purger,
                                    ObjectProvider<PrivateDocumentStorage> storage,
@@ -52,6 +55,11 @@ public class DocumentDeletionService {
             throw new IllegalArgumentException("Deletion restore window must be positive");
         }
         this.restoreWindow = restoreWindow;
+    }
+
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -110,6 +118,9 @@ public class DocumentDeletionService {
         if (limit < 1 || limit > 500) {
             throw new IllegalArgumentException("Limit must be between 1 and 500");
         }
+        if (recoveryGate != null && recoveryGate.isIsolated()) {
+            return 0;
+        }
         PrivateDocumentStorage objects = storage.getIfAvailable();
         if (objects == null) {
             LOG.warn("Document purge is paused because storage is not configured");
@@ -118,6 +129,9 @@ public class DocumentDeletionService {
         Instant now = clock.instant();
         int purged = 0;
         for (Long documentId : documents.findExpired(now, limit)) {
+            if (recoveryGate != null && recoveryGate.isIsolated()) {
+                break;
+            }
             try {
                 if (!purger.purge(documentId, now)) {
                     continue;

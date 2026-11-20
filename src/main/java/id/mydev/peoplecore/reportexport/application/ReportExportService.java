@@ -8,6 +8,7 @@ import id.mydev.peoplecore.common.outbox.OutboxEventRepository;
 import id.mydev.peoplecore.document.application.service.RevocableDocumentTransfer;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.application.service.AuthorizationFenceService;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import id.mydev.peoplecore.reporting.application.ReportRequest;
 import id.mydev.peoplecore.reporting.application.ReportSnapshot;
 import id.mydev.peoplecore.reporting.application.ScopedReportService;
@@ -59,6 +60,7 @@ public class ReportExportService {
     private final ObjectProvider<RevocableDocumentTransfer> transfers;
     private final OutboxEventRepository outbox;
     private Supplier<List<OutboxEventObserver>> observers = List::of;
+    private ServiceRecoveryGate recoveryGate;
 
     public ReportExportService(ReportExportRepository repository, AccountAccessService access,
             AuthorizationFenceService fence, AdmissionGuard admission, ScopedReportService reports,
@@ -72,6 +74,11 @@ public class ReportExportService {
         fresh.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         fresh.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         fresh.setTimeout(2);
+    }
+
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
     }
 
     @Autowired(required = false)
@@ -226,7 +233,10 @@ public class ReportExportService {
         return new JwtAuthenticationToken(jwt);
     }
 
-    public boolean recovery() { return environment.getProperty("peoplecore.recovery.isolated",Boolean.class,false); }
+    public boolean recovery() {
+        return environment.getProperty("peoplecore.recovery.isolated",Boolean.class,false)
+            || (recoveryGate!=null && recoveryGate.isIsolated());
+    }
 
     public void requireAvailable() {
         if(recovery() || !environment.getProperty("peoplecore.exports.enabled",Boolean.class,false))

@@ -5,10 +5,13 @@ import id.mydev.peoplecore.document.domain.repository.DocumentContentRepository;
 import id.mydev.peoplecore.document.domain.repository.DocumentContentRepository.TargetRecord;
 import id.mydev.peoplecore.identity.application.service.AccountAccessService;
 import id.mydev.peoplecore.identity.domain.model.UserAccount;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +21,7 @@ public class DocumentContentQuery {
     private final DocumentContentRepository documents;
     private final AccountAccessService access;
     private final Clock clock;
+    private ServiceRecoveryGate recoveryGate;
 
     public DocumentContentQuery(DocumentContentRepository documents, AccountAccessService access, Clock clock) {
         this.documents = documents;
@@ -25,9 +29,17 @@ public class DocumentContentQuery {
         this.clock = clock;
     }
 
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
+    }
+
     @Transactional(readOnly = true)
     public DocumentTarget requireOwnedClaimEvidence(UUID documentPublicId, Authentication caller) {
         Objects.requireNonNull(documentPublicId, "documentPublicId must not be null");
+        if (recoveryGate != null) {
+            recoveryGate.requireNormalOperation();
+        }
         Instant now = clock.instant();
         UserAccount account = access.requireActive(caller, now);
         UUID ownEmployee = access.ownEmployeePublicId(account).orElseThrow(ResourceNotFoundException::new);

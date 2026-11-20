@@ -140,7 +140,7 @@ class NotificationAttentionPostgresTest {
             JdbcTemplate jdbc=fixture.jdbc; var repository=new JdbcNotificationRepository(jdbc);
             Delivery legacy=delivery(jdbc,repository,true).orElseThrow();
             jdbc.update("UPDATE notification_delivery SET state='FAILED',lease_ends_at=NULL WHERE public_id=?",legacy.id());
-            assertEquals(1,fixture.flyway().migrate().migrationsExecuted); fixture.grantRuntime();
+            assertEquals(2,fixture.flyway().migrate().migrationsExecuted); fixture.grantRuntime();
             assertEquals(1,repository.attentionCount());
             delivery(jdbc,repository,false);
             assertEquals(2,repository.attentionCount());

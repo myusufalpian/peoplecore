@@ -10,6 +10,9 @@ import id.mydev.peoplecore.common.command.IdempotencyKeys;
 import id.mydev.peoplecore.reporting.application.ReportRequest;
 import id.mydev.peoplecore.reporting.application.ScopedReportService;
 import id.mydev.peoplecore.reportexport.application.ReportExportService.Summary;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 import java.util.UUID;
 import org.springframework.security.core.Authentication;
@@ -62,6 +65,6 @@ public class ReportExportCommands {
         return parsed;
     }
 
-    public record Request(ReportRequest report,String format) { }
+    public record Request(@NotNull @Valid ReportRequest report,@NotBlank String format) { }
     private record Payload(UUID publicId,Request request) { }
 }

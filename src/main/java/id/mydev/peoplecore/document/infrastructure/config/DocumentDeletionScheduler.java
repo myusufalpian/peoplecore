@@ -28,7 +28,8 @@ public final class DocumentDeletionScheduler {
     @Scheduled(initialDelayString = "${peoplecore.documents.deletion.poll-interval:PT1H}",
         fixedDelayString = "${peoplecore.documents.deletion.poll-interval:PT1H}")
     public void poll() {
-        if (!environment.getProperty(ENABLED, Boolean.class, false)) {
+        if (!environment.getProperty(ENABLED, Boolean.class, false)
+            || environment.getProperty("peoplecore.recovery.isolated", Boolean.class, false)) {
             return;
         }
         try {

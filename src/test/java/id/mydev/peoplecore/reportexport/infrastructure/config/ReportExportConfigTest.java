@@ -23,6 +23,11 @@ class ReportExportConfigTest {
         });
         new ApplicationContextRunner().withUserConfiguration(ReportExportConfig.class)
             .withPropertyValues("peoplecore.exports.enabled=true").run(context->{
+                assertTrue(context.getBeansOfType(RevocableDocumentTransfer.class).isEmpty());
+                assertTrue(context.getBeansOfType(ExportArtifactStorage.class).isEmpty());
+            });
+        new ApplicationContextRunner().withUserConfiguration(ReportExportConfig.class)
+            .withPropertyValues("peoplecore.exports.enabled=true","peoplecore.exports.download.enabled=true").run(context->{
                 assertEquals(1,context.getBeansOfType(RevocableDocumentTransfer.class).size());
                 assertTrue(context.getBeansOfType(ExportArtifactStorage.class).isEmpty());
             });

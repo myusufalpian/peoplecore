@@ -19,6 +19,7 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 @ConditionalOnProperty(name="peoplecore.exports.enabled",havingValue="true")
 public class ReportExportConfig {
     @Bean(name="exportRevocableTransfer",destroyMethod="close")
+    @ConditionalOnProperty(name="peoplecore.exports.download.enabled",havingValue="true")
     RevocableDocumentTransfer exportRevocableTransfer() {
         return new RevocableDocumentTransfer(2,Duration.ofSeconds(15),Duration.ofSeconds(2));
     }

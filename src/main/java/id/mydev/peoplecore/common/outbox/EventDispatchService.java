@@ -1,5 +1,6 @@
 package id.mydev.peoplecore.common.outbox;
 
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -7,6 +8,8 @@ import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -18,6 +21,7 @@ public class EventDispatchService {
     private final EventIngestionService ingestion;
     private final TransactionTemplate transactions;
     private final Clock clock;
+    private ServiceRecoveryGate recoveryGate;
 
     public EventDispatchService(TransportRepository repository, EventIngestionService ingestion,
                                 PlatformTransactionManager manager, Clock clock) {
@@ -27,7 +31,15 @@ public class EventDispatchService {
         this.clock = clock;
     }
 
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
+    }
+
     public int publish(EventTransport transport) {
+        if (recoveryGate != null && recoveryGate.isIsolated()) {
+            return 0;
+        }
         List<TransportRepository.Publication> work = transactions.execute(status -> repository.claim(clock.instant(), 1));
         if (work == null || work.isEmpty()) {
             return 0;
@@ -68,7 +80,7 @@ public class EventDispatchService {
     }
 
     public int replay(EventTransport transport) {
-        if (repository.oldestPendingSeconds(clock.instant()) > 300) {
+        if ((recoveryGate != null && recoveryGate.isIsolated()) || repository.oldestPendingSeconds(clock.instant()) > 300) {
             return 0;
         }
         Optional<TransportRepository.ReplayItem> next = transactions.execute(status -> repository.claimReplay(clock.instant()));

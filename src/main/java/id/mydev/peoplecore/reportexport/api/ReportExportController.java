@@ -4,6 +4,7 @@ import id.mydev.peoplecore.reportexport.application.ReportExportCommands;
 import id.mydev.peoplecore.reportexport.application.ReportExportCommands.Request;
 import id.mydev.peoplecore.reportexport.application.ReportExportService;
 import id.mydev.peoplecore.reportexport.application.ReportExportService.Summary;
+import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -33,7 +34,7 @@ public class ReportExportController {
     }
 
     @PostMapping
-    public ResponseEntity<Summary> create(Authentication caller,@RequestHeader("Idempotency-Key") String key,@RequestBody Request request) {
+    public ResponseEntity<Summary> create(Authentication caller,@RequestHeader("Idempotency-Key") String key,@Valid @RequestBody Request request) {
         Summary result=commands.create(caller,key,request);
         return ResponseEntity.accepted().location(URI.create("/api/v1/report-exports/"+result.publicId()))
             .cacheControl(CacheControl.noStore()).body(result);

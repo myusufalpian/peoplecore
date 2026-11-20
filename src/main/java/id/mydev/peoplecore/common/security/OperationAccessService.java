@@ -16,9 +16,23 @@ public class OperationAccessService {
     }
 
     public UserAccount requireOperator(Authentication caller, Instant now) {
+        return requireGlobalRole(caller, "SYSTEM_ADMIN", now);
+    }
+
+    public UserAccount requireGlobalRole(Authentication caller, String role, Instant now) {
         UserAccount account = access.requireActive(caller, now);
-        if (!access.hasScopedRole(account.getId(), "SYSTEM_ADMIN", null, now)) {
-            throw new AccessDeniedException("Organization-wide operations authority required");
+        if (!access.hasScopedRole(account.getId(), role, null, now)) {
+            throw new AccessDeniedException("Organization-wide " + role + " authority required");
+        }
+        return account;
+    }
+
+    public UserAccount requireRecoveryViewer(Authentication caller, Instant now) {
+        UserAccount account = access.requireActive(caller, now);
+        if (!access.hasScopedRole(account.getId(), "SYSTEM_ADMIN", null, now)
+            && !access.hasScopedRole(account.getId(), "HR_ADMIN", null, now)
+            && !access.hasScopedRole(account.getId(), "FINANCE_PAYROLL", null, now)) {
+            throw new AccessDeniedException("Organization-wide recovery authority required");
         }
         return account;
     }

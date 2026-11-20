@@ -12,6 +12,7 @@ import id.mydev.peoplecore.notification.domain.NotificationResolver;
 import id.mydev.peoplecore.notification.domain.InvitationReissueRequiredException;
 import id.mydev.peoplecore.common.command.IdempotencyKeys;
 import id.mydev.peoplecore.common.security.OperationAccessService;
+import id.mydev.peoplecore.infrastructure.recovery.ServiceRecoveryGate;
 import id.mydev.peoplecore.notification.domain.NotificationModels.Delivery;
 import id.mydev.peoplecore.notification.domain.NotificationModels.Summary;
 import id.mydev.peoplecore.notification.domain.repository.NotificationRepository;
@@ -24,6 +25,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
 import org.springframework.security.core.Authentication;
@@ -43,9 +46,14 @@ public class NotificationSupportService {
     private final IdentityNotificationAccess identity;
     private final List<NotificationResolver> resolvers;
     private final NotificationAcceptance acceptance;
+    private ServiceRecoveryGate recoveryGate;
     public NotificationSupportService(NotificationRepository repository,OperationAccessService access,AuditEventWriter audit,
         AdmissionGuard admission,Clock clock,Environment environment,IdentityNotificationAccess identity,List<NotificationResolver> resolvers,NotificationAcceptance acceptance) {
         this.repository=repository; this.access=access; this.audit=audit; this.admission=admission; this.clock=clock; this.environment=environment; this.identity=identity; this.resolvers=List.copyOf(resolvers); this.acceptance=acceptance;
+    }
+    @Autowired(required = false)
+    public void configureRecoveryGate(ObjectProvider<ServiceRecoveryGate> recoveryGate) {
+        this.recoveryGate = recoveryGate == null ? null : recoveryGate.getIfAvailable();
     }
     @Transactional(readOnly=true)
     public List<Summary> list(Authentication caller,int page,int size) {
@@ -146,7 +154,8 @@ public class NotificationSupportService {
             reason.trim(),"{\"acknowledgedDuplicate\":"+acknowledged+"}",clock.instant()));
     }
     private void checkRecovery() {
-        if(environment.getProperty("peoplecore.recovery.isolated",Boolean.class,false)) throw new CommandBusyException("Recovery isolation is active");
+        if(environment.getProperty("peoplecore.recovery.isolated",Boolean.class,false)
+            || (recoveryGate!=null && recoveryGate.isIsolated())) throw new CommandBusyException("Recovery isolation is active");
     }
     private static void validate(String key,String reason) {
         IdempotencyKeys.requireValid(key);
